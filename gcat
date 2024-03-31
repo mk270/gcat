@@ -21,60 +21,64 @@ def absolutise_url(base, relative):
         relative = relative.replace("http://", "gemini://")
     return relative
 
-signal.signal(signal.SIGALRM, timeout)
-signal.alarm(5)
+
+def main():
+    url = sys.argv[1]
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme == "":
+        url = "gemini://"+url
+        parsed_url = urllib.parse.urlparse(url)
+
+    if parsed_url.scheme != "gemini":
+        print("Sorry, Gemini links only.")
+        sys.exit(1)
+    if parsed_url.port is not None:
+        useport = parsed_url.port
+    else:
+        useport = 1965
+    # Do the Gemini transaction
+    while True:
+        s = socket.create_connection((parsed_url.hostname, useport))
+        context = ssl.SSLContext()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        s = context.wrap_socket(s, server_hostname = parsed_url.netloc)
+        s.sendall((url + '\r\n').encode("UTF-8"))
+        # Get header and check for redirects
+        fp = s.makefile("rb")
+        header = fp.readline()
+        print(header.decode("UTF-8"), end="")
+        header = header.decode("UTF-8").strip()
+        status, mime = header.split()[:2]
+        # Handle input requests
+        if status.startswith("1"):
+            # Prompt
+            query = input("INPUT" + mime + "> ")
+            url += "?" + urllib.parse.quote(query) # Bit lazy...
+        # Follow redirects
+        elif status.startswith("3"):
+            url = absolutise_url(url, mime)
+            parsed_url = urllib.parse.urlparse(url)
+        # Otherwise, we're done.
+        else:
+            break
+    # Fail if transaction was not successful
+    if status.startswith("2"):
+        if mime.startswith("text/"):
+            # Decode according to declared charset
+            mime, mime_opts = cgi.parse_header(mime)
+            body = fp.read()
+            body = body.decode(mime_opts.get("charset","UTF-8"))
+            print(body, end="")
+        else:
+            print(fp.read(), end="")
+
 
 if len(sys.argv) != 2:
     print("Usage:")
     print("gcat gemini://gemini.circumlunar.space")
     sys.exit(1)
-
-url = sys.argv[1]
-parsed_url = urllib.parse.urlparse(url)
-if parsed_url.scheme == "":
-    url = "gemini://"+url
-    parsed_url = urllib.parse.urlparse(url)
-
-if parsed_url.scheme != "gemini":
-    print("Sorry, Gemini links only.")
-    sys.exit(1)
-if parsed_url.port is not None:
-    useport = parsed_url.port
 else:
-    useport = 1965
-# Do the Gemini transaction
-while True:
-    s = socket.create_connection((parsed_url.hostname, useport))
-    context = ssl.SSLContext()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    s = context.wrap_socket(s, server_hostname = parsed_url.netloc)
-    s.sendall((url + '\r\n').encode("UTF-8"))
-    # Get header and check for redirects
-    fp = s.makefile("rb")
-    header = fp.readline()
-    print(header.decode("UTF-8"), end="")
-    header = header.decode("UTF-8").strip()
-    status, mime = header.split()[:2]
-    # Handle input requests
-    if status.startswith("1"):
-        # Prompt
-        query = input("INPUT" + mime + "> ")
-        url += "?" + urllib.parse.quote(query) # Bit lazy...
-    # Follow redirects
-    elif status.startswith("3"):
-        url = absolutise_url(url, mime)
-        parsed_url = urllib.parse.urlparse(url)
-    # Otherwise, we're done.
-    else:
-        break
-# Fail if transaction was not successful
-if status.startswith("2"):
-    if mime.startswith("text/"):
-        # Decode according to declared charset
-        mime, mime_opts = cgi.parse_header(mime)
-        body = fp.read()
-        body = body.decode(mime_opts.get("charset","UTF-8"))
-        print(body, end="")
-    else:
-        print(fp.read(), end="")
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(5)
+    main()
