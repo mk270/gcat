@@ -6,6 +6,11 @@ import socket
 import ssl
 import sys
 import urllib.parse
+import signal
+import time
+
+def timeout(signum, frame):
+    sys.exit(99)
 
 def absolutise_url(base, relative):
     # Absolutise relative links
@@ -15,6 +20,9 @@ def absolutise_url(base, relative):
         relative = urllib.parse.urljoin(base, relative)
         relative = relative.replace("http://", "gemini://")
     return relative
+
+signal.signal(signal.SIGALRM, timeout)
+signal.alarm(5)
 
 if len(sys.argv) != 2:
     print("Usage:")
