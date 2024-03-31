@@ -22,7 +22,10 @@ def absolutise_url(base, relative):
     return relative
 
 
-def main():
+def main(quiet):
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(5)
+
     url = sys.argv[1]
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme == "":
@@ -47,7 +50,8 @@ def main():
         # Get header and check for redirects
         fp = s.makefile("rb")
         header = fp.readline()
-        print(header.decode("UTF-8"), end="")
+        if not quiet:
+            print(header.decode("UTF-8"), end="")
         header = header.decode("UTF-8").strip()
         status, mime = header.split()[:2]
         # Handle input requests
@@ -74,11 +78,14 @@ def main():
             print(fp.read(), end="")
 
 
+quiet = False
+if sys.argv[1] == "-q":
+    quiet = True
+    del(sys.argv[1])
+
 if len(sys.argv) != 2:
     print("Usage:")
     print("gcat gemini://gemini.circumlunar.space")
     sys.exit(1)
 else:
-    signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(5)
-    main()
+    main(quiet)
