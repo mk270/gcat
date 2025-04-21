@@ -8,6 +8,8 @@ import sys
 import urllib.parse
 import signal
 import time
+import logging
+import argparse
 
 def timeout(signum, frame):
     sys.exit(99)
@@ -22,11 +24,11 @@ def absolutise_url(base, relative):
     return relative
 
 
-def main(quiet):
+def main(args):
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(5)
 
-    url = sys.argv[1]
+    url = args.url
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme == "":
         url = "gemini://"+url
@@ -50,7 +52,7 @@ def main(quiet):
         # Get header and check for redirects
         fp = s.makefile("rb")
         header = fp.readline()
-        if not quiet:
+        if not args.quiet:
             print(header.decode("UTF-8"), end="")
         header = header.decode("UTF-8").strip()
         status, mime = header.split()[:2]
@@ -78,15 +80,20 @@ def main(quiet):
         else:
             print(fp.read(), end="")
 
-if __name__ == '__main__':
-    quiet = False
-    if sys.argv[1] == "-q":
-        quiet = True
-        del(sys.argv[1])
+def parse_cmdline():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        required=False,
+                        help='Suppress printing header info')
+    parser.add_argument('--debug', action='store_true', required=False,
+                    help='set logging level to INFO')
+    parser.add_argument('url',
+                        help='URL to download from')
 
-    if len(sys.argv) != 2:
-        print("Usage:")
-        print("gcat gemini://gemini.circumlunar.space")
-        sys.exit(1)
-    else:
-        main(quiet)
+    args = parser.parse_args()
+    if args.debug:
+        logging.getLogger().setLevel(20)
+    main(args)
+
+if __name__ == '__main__':
+    parse_cmdline()
