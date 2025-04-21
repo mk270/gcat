@@ -78,15 +78,15 @@ def main(quiet):
         else:
             print(fp.read(), end="")
 
+if __name__ == '__main__':
+    quiet = False
+    if sys.argv[1] == "-q":
+        quiet = True
+        del(sys.argv[1])
 
-quiet = False
-if sys.argv[1] == "-q":
-    quiet = True
-    del(sys.argv[1])
-
-if len(sys.argv) != 2:
-    print("Usage:")
-    print("gcat gemini://gemini.circumlunar.space")
-    sys.exit(1)
-else:
-    main(quiet)
+    if len(sys.argv) != 2:
+        print("Usage:")
+        print("gcat gemini://gemini.circumlunar.space")
+        sys.exit(1)
+    else:
+        main(quiet)
