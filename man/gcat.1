@@ -1,0 +1,61 @@
+```
+.\" Manpage for gcat
+.TH GCAT 1 "October 2023"
+.SH NAME
+gcat \- A command-line tool for fetching and displaying Gemini URLs
+.SH SYNOPSIS
+.B gcat
+[\-q|--quiet]
+[\-d|--debug]
+.I url
+.SH DESCRIPTION
+.B gcat
+is a command-line utility that connects to Gemini servers to fetch and display content from Gemini URLs. It supports handling input requests, following redirects, and printing headers based on user preferences.
+
+.SH OPTIONS
+.TP
+.BR -q ", " --quiet
+Suppress the printing of header information.
+.TP
+.BR -d ", " --debug
+Set logging level to INFO for debugging purposes.
+.TP
+.I url
+The Gemini URL to fetch. The URL should begin with "gemini://". If not specified, it will be prepended automatically.
+
+.SH SIGNALS
+.B gcat
+handles the SIGALRM signal to implement a timeout mechanism, exiting with status code 99 if the operation takes longer than 5 seconds.
+
+.SH EXAMPLES
+.TP
+.B gcat gemini://example.com
+Fetches and displays the content from the specified Gemini URL.
+
+.TP
+.B gcat -q gemini://example.com
+Fetches the content from the specified URL without printing the header information.
+
+.SH EXIT STATUS
+.B gcat
+exits with the following statuses:
+.TP
+.B 0
+Successful completion.
+.TP
+.B 1
+Invalid URL or unsupported scheme.
+.TP
+.B 99
+Operation timed out.
+
+.SH NOTES
+For debugging purposes, you can enable detailed logging by using the
+.BR --debug
+option. The utility will fetch the content using SSL with no hostname verification, which can be insecure.
+.SH AUTHOR
+Solderpunk
+.SH SEE ALSO
+.BR curl (1),
+.BR wget (1)
+```
