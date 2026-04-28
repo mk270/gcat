@@ -4,7 +4,8 @@ set -eu
 
 PKG=$(basename $(realpath $(dirname $0)))
 
-STOW=/usr/local/stow
+PREFIX=${PREFIX:-/usr/local}
+STOW=$PREFIX/stow
 DIR=$STOW/$PKG
 
 if [ -d $DIR ]; then
@@ -15,21 +16,21 @@ BASE=$(dirname $0)
 
 if [ -d $BASE/bin ]; then
     install -d $DIR/bin
-    install -m 755 -t $DIR/bin bin/*
+    install -m 755 -t $DIR/bin $BASE/bin/*
 fi
 
 if [ -d $BASE/man ]; then
     # note we're assuming there's only section 1
     MANDIR=share/man/man1
     install -d $DIR/$MANDIR
-    install -m 644 -t $DIR/$MANDIR man/*
+    install -m 644 -t $DIR/$MANDIR $BASE/man/*
 fi
 
 if [ -d $BASE/share ]; then
     # note we're assuming it's all non-executable
     install -d $DIR/share
-    install -m 644 -t $DIR/share share/*
+    install -m 644 -t $DIR/share $BASE/share/*
 fi
 
 cd $STOW
-stow $PKG
+stow -t $PREFIX $PKG
