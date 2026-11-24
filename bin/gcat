@@ -12,7 +12,7 @@ import logging
 import argparse
 import io
 from types import FrameType
-from typing import List, NoReturn, cast
+from typing import List, NoReturn, Tuple, cast
 
 def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
@@ -109,17 +109,14 @@ def open_request(url: str) -> io.BufferedReader:
     return s.makefile("rb")
 
 
-def main(args: argparse.Namespace) -> None:
-    signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(5)
-
-    url = normalise_url(args.url)
-    # Do the Gemini transaction
+def transact(url: str, quiet: bool) -> Tuple[io.BufferedReader, str, str]:
+    """Do the Gemini transaction, answering prompts and following
+    redirects; return the final (response stream, status, mime)."""
     while True:
         # Get header and check for redirects
         fp = open_request(url)
         raw_header = read_header(fp)
-        if not args.quiet:
+        if not quiet:
             print(raw_header.decode("UTF-8"), end="")
 
         header = raw_header.decode("UTF-8").strip()
@@ -134,8 +131,15 @@ def main(args: argparse.Namespace) -> None:
             url = absolutise_url(url, mime)
         # Otherwise, we're done.
         else:
-            break
+            return fp, status, mime
 
+
+def main(args: argparse.Namespace) -> None:
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(5)
+
+    url = normalise_url(args.url)
+    fp, status, mime = transact(url, args.quiet)
     # Fail if transaction was not successful
     if status.startswith("2"):
         show_response(fp, mime)
