@@ -22,7 +22,7 @@ import io
 import codecs
 import contextlib
 from types import FrameType
-from typing import Iterator, NamedTuple, NoReturn, Tuple
+from typing import Callable, Iterator, NamedTuple, NoReturn, Optional, Tuple
 
 DEFAULT_TIMEOUT = 5
 
@@ -241,7 +241,7 @@ class Connection:
 
 
 class Response(NamedTuple):
-    """The final outcome of a transaction; the caller closes conn."""
+    """The final outcome of a request; the caller closes conn."""
     conn: Connection
     status: str
     meta: str
@@ -280,6 +280,57 @@ def parse_header(raw_header: bytes) -> Tuple[str, str]:
     return fields[0], fields[1]
 
 
+class GeminiClient:
+    """Make Gemini requests, answering prompts and following redirects.
+
+    The client does no I/O of its own beyond the connection.  Callers
+    supply hooks for the rest:
+
+    on_input(prompt) -> answer
+        Called when the server asks for input.  Raise InputError if
+        there is no answer; without this hook a prompt is an error.
+    on_header(line)
+        Called with every response header line as received, before it
+        is parsed, so with each redirect and prompt on the way too.
+    """
+    def __init__(self,
+                 on_input: Optional[Callable[[str], str]] = None,
+                 on_header: Optional[Callable[[str], None]] = None) -> None:
+        self.on_input = on_input
+        self.on_header = on_header
+
+    def request(self, url: str) -> Response:
+        """Fetch url; the caller must close the response's connection."""
+        url = normalise_url(url)
+        while True:
+            # Get header and check for redirects
+            conn = open_request(url)
+            try:
+                raw_header = read_header(conn.fp)
+                if self.on_header:
+                    self.on_header(raw_header.decode("UTF-8"))
+
+                status, meta = parse_header(raw_header)
+            except Exception:
+                conn.close()
+                raise
+            # Handle input requests
+            if status.startswith("1"):
+                # Prompt
+                conn.close()
+                if not self.on_input:
+                    raise InputError("server requested input: %s" % meta)
+                query = self.on_input(meta)
+                url += "?" + urllib.parse.quote(query) # Bit lazy...
+            # Follow redirects
+            elif status.startswith("3"):
+                conn.close()
+                url = absolutise_url(url, meta)
+            # Otherwise, we're done.
+            else:
+                return Response(conn, status, meta)
+
+
 @contextlib.contextmanager
 def alarm_paused() -> Iterator[None]:
     """Stop the SIGALRM timer while waiting for the user, then resume it
@@ -292,48 +343,27 @@ def alarm_paused() -> Iterator[None]:
             signal.alarm(remaining)
 
 
-def transact(url: str, quiet: bool) -> Response:
-    """Do the Gemini transaction, answering prompts and following
-    redirects; return the final response.  The caller must close its
-    connection."""
-    while True:
-        # Get header and check for redirects
-        conn = open_request(url)
-        try:
-            raw_header = read_header(conn.fp)
-            if not quiet:
-                print(raw_header.decode("UTF-8"), end="")
+def cli_input(prompt: str) -> str:
+    """Answer a prompt from the server by asking the user."""
+    try:
+        with alarm_paused():
+            return input("INPUT " + prompt + "> ")
+    except EOFError as e:
+        raise InputError("server requested input, but stdin is at "
+                         "end of file") from e
 
-            status, meta = parse_header(raw_header)
-        except Exception:
-            conn.close()
-            raise
-        # Handle input requests
-        if status.startswith("1"):
-            # Prompt
-            conn.close()
-            try:
-                with alarm_paused():
-                    query = input("INPUT " + meta + "> ")
-            except EOFError as e:
-                raise InputError("server requested input, but stdin is at "
-                                 "end of file") from e
-            url += "?" + urllib.parse.quote(query) # Bit lazy...
-        # Follow redirects
-        elif status.startswith("3"):
-            conn.close()
-            url = absolutise_url(url, meta)
-        # Otherwise, we're done.
-        else:
-            return Response(conn, status, meta)
+
+def cli_header(line: str) -> None:
+    print(line, end="")
 
 
 def main(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(args.timeout)
 
-    url = normalise_url(args.url)
-    response = transact(url, args.quiet)
+    client = GeminiClient(on_input=cli_input,
+                          on_header=None if args.quiet else cli_header)
+    response = client.request(args.url)
     with response.conn:
         # Fail if transaction was not successful
         if response.status.startswith("2"):
