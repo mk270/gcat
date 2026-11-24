@@ -91,8 +91,41 @@ def normalise_url(raw: str) -> str:
     return url
 
 
-def open_request(url: str) -> io.BufferedReader:
-    """Connect, send the request line, return the response stream."""
+# How long to wait for the peer while shutting a connection down
+CLOSE_TIMEOUT = 1.0
+
+
+class Connection:
+    """A TLS connection and a buffered reader over it.
+
+    close() sends a TLS close_notify before releasing the socket, so
+    the peer can tell a deliberate hang-up from a truncated stream.
+    Usable as a context manager.
+    """
+    def __init__(self, sock: ssl.SSLSocket) -> None:
+        self.sock = sock
+        self.fp = sock.makefile("rb")
+
+    def close(self) -> None:
+        try:
+            self.sock.settimeout(CLOSE_TIMEOUT)
+            self.sock.unwrap()
+        except OSError:
+            # includes ssl.SSLError; the peer may have gone already
+            pass
+        finally:
+            self.fp.close()
+            self.sock.close()
+
+    def __enter__(self) -> "Connection":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
+def open_request(url: str) -> Connection:
+    """Connect and send the request line."""
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.port is not None:
         useport = parsed_url.port
@@ -106,37 +139,39 @@ def open_request(url: str) -> io.BufferedReader:
     s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
                             suppress_ragged_eofs = False)
     s.sendall((url + '\r\n').encode("UTF-8"))
-    fp = s.makefile("rb")
-    # the socket now really closes when fp does
-    s.close()
-    return fp
+    return Connection(s)
 
 
-def transact(url: str, quiet: bool) -> Tuple[io.BufferedReader, str, str]:
+def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
     """Do the Gemini transaction, answering prompts and following
-    redirects; return the final (response stream, status, mime)."""
+    redirects; return the final (connection, status, mime).  The
+    caller must close the connection."""
     while True:
         # Get header and check for redirects
-        fp = open_request(url)
-        raw_header = read_header(fp)
-        if not quiet:
-            print(raw_header.decode("UTF-8"), end="")
+        conn = open_request(url)
+        try:
+            raw_header = read_header(conn.fp)
+            if not quiet:
+                print(raw_header.decode("UTF-8"), end="")
 
-        header = raw_header.decode("UTF-8").strip()
-        status, mime = header.split()[:2]
+            header = raw_header.decode("UTF-8").strip()
+            status, mime = header.split()[:2]
+        except Exception:
+            conn.close()
+            raise
         # Handle input requests
         if status.startswith("1"):
             # Prompt
-            fp.close()
+            conn.close()
             query = input("INPUT" + mime + "> ")
             url += "?" + urllib.parse.quote(query) # Bit lazy...
         # Follow redirects
         elif status.startswith("3"):
-            fp.close()
+            conn.close()
             url = absolutise_url(url, mime)
         # Otherwise, we're done.
         else:
-            return fp, status, mime
+            return conn, status, mime
 
 
 def main(args: argparse.Namespace) -> None:
@@ -144,10 +179,11 @@ def main(args: argparse.Namespace) -> None:
     signal.alarm(5)
 
     url = normalise_url(args.url)
-    fp, status, mime = transact(url, args.quiet)
-    # Fail if transaction was not successful
-    if status.startswith("2"):
-        show_response(fp, mime)
+    conn, status, mime = transact(url, args.quiet)
+    with conn:
+        # Fail if transaction was not successful
+        if status.startswith("2"):
+            show_response(conn.fp, mime)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
