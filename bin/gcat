@@ -197,7 +197,7 @@ def parse_cmdline() -> None:
     parser.add_argument('-q', '--quiet', action='store_true',
                         required=False,
                         help='Suppress printing header info')
-    parser.add_argument('--debug', action='store_true', required=False,
+    parser.add_argument('-d', '--debug', action='store_true', required=False,
                     help='set logging level to INFO')
     parser.add_argument('url',
                         help='URL to download from')
