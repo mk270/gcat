@@ -57,8 +57,8 @@ def read_all(fp: io.BufferedReader) -> bytes:
     return b"".join(chunks)
 
 
-def print_body(raw_body: bytes, mime: str) -> None:
-    if mime.startswith("text/"):
+def print_body(raw_body: bytes, meta: str) -> None:
+    if meta.startswith("text/"):
         # Decode according to declared charset
         m = email.message.Message()
         m.get_params()
@@ -68,15 +68,15 @@ def print_body(raw_body: bytes, mime: str) -> None:
         print(raw_body, end="")
 
 
-def show_response(fp: io.BufferedReader, mime: str) -> None:
+def show_response(fp: io.BufferedReader, meta: str) -> None:
     """Read the body and print it; on truncation, print what arrived."""
     try:
         raw_body = read_all(fp)
     except TruncatedError as e:
         # show what did arrive, then let the caller report it
-        print_body(e.partial, mime)
+        print_body(e.partial, meta)
         raise
-    print_body(raw_body, mime)
+    print_body(raw_body, meta)
 
 
 def normalise_url(raw: str) -> str:
@@ -130,7 +130,7 @@ class Response(NamedTuple):
     """The final outcome of a transaction; the caller closes conn."""
     conn: Connection
     status: str
-    mime: str
+    meta: str
 
 
 def open_request(url: str) -> Connection:
@@ -154,8 +154,8 @@ def open_request(url: str) -> Connection:
 def parse_header(raw_header: bytes) -> Tuple[str, str]:
     """Split a response header line into (status, meta)."""
     header = raw_header.decode("UTF-8").strip()
-    status, mime = header.split()[:2]
-    return status, mime
+    status, meta = header.split()[:2]
+    return status, meta
 
 
 def transact(url: str, quiet: bool) -> Response:
@@ -170,7 +170,7 @@ def transact(url: str, quiet: bool) -> Response:
             if not quiet:
                 print(raw_header.decode("UTF-8"), end="")
 
-            status, mime = parse_header(raw_header)
+            status, meta = parse_header(raw_header)
         except Exception:
             conn.close()
             raise
@@ -179,7 +179,7 @@ def transact(url: str, quiet: bool) -> Response:
             # Prompt
             conn.close()
             try:
-                query = input("INPUT" + mime + "> ")
+                query = input("INPUT" + meta + "> ")
             except EOFError:
                 print("\ngcat: server requested input, but stdin is at "
                       "end of file", file=sys.stderr)
@@ -188,10 +188,10 @@ def transact(url: str, quiet: bool) -> Response:
         # Follow redirects
         elif status.startswith("3"):
             conn.close()
-            url = absolutise_url(url, mime)
+            url = absolutise_url(url, meta)
         # Otherwise, we're done.
         else:
-            return Response(conn, status, mime)
+            return Response(conn, status, meta)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -203,7 +203,7 @@ def main(args: argparse.Namespace) -> None:
     with response.conn:
         # Fail if transaction was not successful
         if response.status.startswith("2"):
-            show_response(response.conn.fp, response.mime)
+            show_response(response.conn.fp, response.meta)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
