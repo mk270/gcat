@@ -77,6 +77,12 @@ class HeaderError(GeminiError):
     exit_status = 5
 
 
+class DecodeError(GeminiError):
+    """A text body could not be decoded."""
+    exit_status = 4
+    cli_format = "gcat: error: %s (see --lenient)"
+
+
 class GeminiTimeout(GeminiError):
     """The request took longer than its time limit."""
     exit_status = 99
@@ -152,12 +158,6 @@ def read_chunks(fp: io.BufferedReader) -> Iterator[bytes]:
             yield chunk
     except ssl.SSLEOFError as e:
         raise TruncatedError() from e
-
-
-class DecodeError(GeminiError):
-    """A text body could not be decoded."""
-    exit_status = 4
-    cli_format = "gcat: error: %s (see --lenient)"
 
 
 class TextDecoder:
