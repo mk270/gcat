@@ -2,6 +2,11 @@
 
 # gcat, based on Solderpunk's origin gcat, and distributable under the same
 # terms
+#
+# This version of the code is slightly more aware of TLS close notification
+# issues, and UTF-8 decoding woes
+#
+# Streaming responses is supported
 
 import email.message
 import os
