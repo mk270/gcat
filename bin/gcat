@@ -80,6 +80,18 @@ class ConnectError(GeminiError):
     exit_status = 6
 
 
+class ReadError(GeminiError):
+    """The connection failed while the response was being read.
+
+    For example it was reset by the peer.  The original exception is the
+    __cause__.  (A connection that ends without a TLS close_notify is
+    TruncatedError.)
+    """
+    exit_status = 7
+    cli_format = ("gcat: error: connection lost while reading the "
+                  "response: %s")
+
+
 class GeminiTimeout(GeminiError):
     """The request took longer than its time limit."""
     exit_status = 99
@@ -109,6 +121,12 @@ def normalise_url(raw: str) -> str:
     if parsed_url.scheme != "gemini":
         raise UrlError("Sorry, Gemini links only.")
     return url
+
+
+def reason(error: Exception) -> str:
+    """A short description of why an operation failed."""
+    return (getattr(error, "reason", None) or getattr(error, "strerror", None)
+            or str(error))
 
 
 class Deadline:
@@ -169,7 +187,7 @@ class DeadlineReader(io.RawIOBase):
     def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
         self.sock = sock
         self.deadline = deadline
-        self.timed_out = False
+        self.broken = False         # the peer has stopped answering
 
     def readable(self) -> bool:
         return True
@@ -180,8 +198,13 @@ class DeadlineReader(io.RawIOBase):
             with self.deadline.enforced():
                 return self.sock.recv_into(buffer)
         except GeminiTimeout:
-            self.timed_out = True
+            self.broken = True
             raise
+        except ssl.SSLEOFError:
+            raise                   # callers report a missing close_notify
+        except OSError as e:
+            self.broken = True
+            raise ReadError(reason(e)) from e
 
 
 class Connection:
@@ -199,7 +222,7 @@ class Connection:
     def close(self) -> None:
         """Close politely, unless the peer has stopped answering."""
         try:
-            if not self._reader.timed_out:
+            if not self._reader.broken:
                 self.sock.settimeout(CLOSE_TIMEOUT)
                 self.sock.unwrap()
         except OSError:
@@ -214,12 +237,6 @@ class Connection:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
-
-
-def reason(error: Exception) -> str:
-    """A short description of why an operation failed."""
-    return (getattr(error, "reason", None) or getattr(error, "strerror", None)
-            or str(error))
 
 
 def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
@@ -418,16 +435,16 @@ class Response:
         """The body decoded as text, as it arrives.
 
         Decoding follows the charset in the meta line, and the response's
-        lenient setting.  If the body is truncated, what arrived is
-        yielded first, a dangling half-character replaced, and then
-        TruncatedError is raised.
+        lenient setting.  If the body is cut short, by TruncatedError or
+        ReadError, what arrived is yielded first, a dangling
+        half-character replaced, and then the error is raised.
         """
         text = TextDecoder(meta_charset(self.meta), self.lenient,
                            self.on_warning or (lambda message: None))
         try:
             for chunk in self.chunks():
                 yield text.decode(chunk)
-        except TruncatedError:
+        except (TruncatedError, ReadError):
             yield text.finish_truncated()
             raise
         yield text.decode(b"", final=True)

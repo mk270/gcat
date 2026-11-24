@@ -78,6 +78,10 @@ The server's response header was missing or malformed.
 The connection to the server could not be made: the host name could not be
 looked up, the connection failed, or the TLS handshake did.
 .TP
+.B 7
+The connection failed while the response was being read, for example because
+the peer reset it.  Any part of the body that arrived has been written.
+.TP
 .B 99
 The request timed out (see
 .BR --timeout ).
