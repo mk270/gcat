@@ -13,6 +13,7 @@ gcat \- A command-line tool for fetching and displaying Gemini URLs
 .SH DESCRIPTION
 .B gcat
 is a command-line utility that connects to Gemini servers to fetch and display content from Gemini URLs. It supports handling input requests, following redirects, and printing headers based on user preferences.
+The response body is written to standard output as it arrives; a body that is not text is written as raw bytes.
 
 .SH OPTIONS
 .TP
@@ -71,7 +72,8 @@ The server requested input, but standard input was at end of file.
 .TP
 .B 4
 A text body could not be decoded: its charset is unknown, or it is not valid
-in its charset.  See
+in its charset.  Output up to the first invalid byte may already have been
+written.  See
 .BR --lenient .
 .TP
 .B 99

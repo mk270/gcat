@@ -11,9 +11,10 @@ import time
 import logging
 import argparse
 import io
+import codecs
 import contextlib
 from types import FrameType
-from typing import Iterator, List, NamedTuple, NoReturn, Tuple
+from typing import Iterator, NamedTuple, NoReturn, Tuple
 
 DEFAULT_TIMEOUT = 5
 
@@ -31,13 +32,7 @@ def absolutise_url(base: str, relative: str) -> str:
 
 
 class TruncatedError(Exception):
-    """The connection ended without a TLS close_notify.
-
-    The data received before that point is in .partial.
-    """
-    def __init__(self, partial: bytes = b"") -> None:
-        super().__init__("connection closed without TLS close_notify")
-        self.partial = partial
+    """The connection ended without a TLS close_notify."""
 
 
 def read_header(fp: io.BufferedReader) -> bytes:
@@ -47,65 +42,104 @@ def read_header(fp: io.BufferedReader) -> bytes:
         raise TruncatedError() from e
 
 
-def read_all(fp: io.BufferedReader) -> bytes:
-    chunks: List[bytes] = []
-
+def read_chunks(fp: io.BufferedReader) -> Iterator[bytes]:
+    """Yield the body as it arrives; raise TruncatedError if it is cut
+    off without a close_notify."""
     try:
         while chunk := fp.read1(65536):
-            chunks.append(chunk)
+            yield chunk
     except ssl.SSLEOFError as e:
-        raise TruncatedError(b"".join(chunks)) from e
-    return b"".join(chunks)
+        raise TruncatedError() from e
 
 
 class DecodeError(Exception):
     """A text body could not be decoded."""
 
 
-def decode_text(raw_body: bytes, charset: str, lenient: bool) -> str:
-    """Decode a text body.
+class TextDecoder:
+    """Decode a text body incrementally.
 
     Raise DecodeError if the charset is unknown or the body is not
     valid in it.  If lenient, warn on stderr instead, falling back to
     UTF-8 for an unknown charset and replacing any invalid bytes.
     """
-    try:
-        return raw_body.decode(charset)
-    except LookupError as e:
-        if not lenient:
-            raise DecodeError("unknown charset %r" % charset) from e
-        print("gcat: warning: unknown charset %r; assuming UTF-8"
-              % charset, file=sys.stderr)
-        charset = "UTF-8"
-    except UnicodeDecodeError as e:
-        if not lenient:
-            raise DecodeError("body is not valid %s" % charset) from e
-        print("gcat: warning: body is not valid %s; replacing bad bytes"
-              % charset, file=sys.stderr)
-    return raw_body.decode(charset, errors="replace")
+    def __init__(self, charset: str, lenient: bool) -> None:
+        self.charset = charset
+        try:
+            factory = codecs.getincrementaldecoder(charset)
+        except LookupError as e:
+            if not lenient:
+                raise DecodeError("unknown charset %r" % charset) from e
+            print("gcat: warning: unknown charset %r; assuming UTF-8"
+                  % charset, file=sys.stderr)
+            self.charset = "UTF-8"
+            factory = codecs.getincrementaldecoder("UTF-8")
+        errors = self._register_replace() if lenient else "strict"
+        self._decoder = factory(errors)
+
+    def _register_replace(self) -> str:
+        """Register an error handler that warns once, then replaces."""
+        warned = False
+
+        def handler(exc: UnicodeError) -> Tuple[str, int]:
+            nonlocal warned
+            if not warned:
+                warned = True
+                print("gcat: warning: body is not valid %s; replacing bad "
+                      "bytes" % self.charset, file=sys.stderr)
+            assert isinstance(exc, UnicodeDecodeError)
+            return "\ufffd", exc.end
+
+        name = "gcat-replace-%d" % id(handler)
+        codecs.register_error(name, handler)
+        return name
+
+    def decode(self, data: bytes, final: bool = False) -> str:
+        try:
+            return self._decoder.decode(data, final)
+        except UnicodeDecodeError as e:
+            raise DecodeError("body is not valid %s" % self.charset) from e
+
+    def finish_truncated(self) -> str:
+        """Flush after a cut-off body, which may end mid-character."""
+        self._decoder.errors = "replace"
+        return self._decoder.decode(b"", True)
 
 
-def print_body(raw_body: bytes, meta: str, lenient: bool) -> None:
-    if meta.startswith("text/"):
-        # Decode according to the charset declared in the meta line
-        m = email.message.Message()
-        m["Content-Type"] = meta
-        charset = m.get_content_charset() or "UTF-8"
-        print(decode_text(raw_body, charset, lenient), end="")
-    else:
-        print(raw_body, end="")
+def meta_charset(meta: str) -> str:
+    """The charset declared in a meta line; UTF-8 if there isn't one."""
+    m = email.message.Message()
+    m["Content-Type"] = meta
+    return m.get_content_charset() or "UTF-8"
 
 
 def show_response(fp: io.BufferedReader, meta: str, lenient: bool) -> None:
-    """Read the body and print it; on truncation, print what arrived."""
-    try:
-        raw_body = read_all(fp)
-    except TruncatedError as e:
-        # Show what did arrive, then let the caller report it.  A cut-off
-        # body can end mid-character, so always decode it leniently.
-        print_body(e.partial, meta, lenient=True)
-        raise
-    print_body(raw_body, meta, lenient)
+    """Write the body to stdout as it arrives.
+
+    Text is decoded by its declared charset; anything else is written
+    as raw bytes.  On truncation, what arrived has already been written.
+    """
+    out = sys.stdout
+    if meta.startswith("text/"):
+        text = TextDecoder(meta_charset(meta), lenient)
+        try:
+            for chunk in read_chunks(fp):
+                out.write(text.decode(chunk))
+                out.flush()
+        except TruncatedError:
+            out.write(text.finish_truncated())
+            out.flush()
+            raise
+        out.write(text.decode(b"", final=True))
+        out.flush()
+    else:
+        out.flush()
+        try:
+            for chunk in read_chunks(fp):
+                out.buffer.write(chunk)
+                out.buffer.flush()
+        finally:
+            out.buffer.flush()
 
 
 def normalise_url(raw: str) -> str:
