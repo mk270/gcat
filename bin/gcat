@@ -12,7 +12,7 @@ import logging
 import argparse
 import io
 from types import FrameType
-from typing import Tuple, List, NoReturn, cast
+from typing import List, NoReturn, cast
 
 def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
@@ -27,23 +27,43 @@ def absolutise_url(base: str, relative: str) -> str:
     return relative
 
 
-def read_all(fp: io.BufferedReader) -> Tuple[bytes, bool]:
-    """Return (data, truncated); truncated means no TLS close_notify."""
+class TruncatedError(Exception):
+    """The connection ended without a TLS close_notify.
+
+    The data received before that point is in .partial.
+    """
+    def __init__(self, partial: bytes = b"") -> None:
+        super().__init__("connection closed without TLS close_notify")
+        self.partial = partial
+
+
+def read_header(fp: io.BufferedReader) -> bytes:
+    try:
+        return fp.readline()
+    except ssl.SSLEOFError as e:
+        raise TruncatedError() from e
+
+
+def read_all(fp: io.BufferedReader) -> bytes:
     chunks: List[bytes] = []
 
     try:
-        while True:
-            chunk = fp.read1(65536)
-            if not chunk:
-                return b"".join(chunks), False
+        while chunk := fp.read1(65536):
             chunks.append(chunk)
-    except ssl.SSLEOFError:
-        return b"".join(chunks), True
+    except ssl.SSLEOFError as e:
+        raise TruncatedError(b"".join(chunks)) from e
+    return b"".join(chunks)
 
 
-def warn_truncated() -> None:
-    print("gcat: warning: connection closed without TLS close_notify; "
-          "response may be truncated", file=sys.stderr)
+def print_body(raw_body: bytes, mime: str) -> None:
+    if mime.startswith("text/"):
+        # Decode according to declared charset
+        m = email.message.Message()
+        m.get_params()
+        charset = cast(str, m.get_param("charset", "UTF-8"))
+        print(raw_body.decode(charset), end="")
+    else:
+        print(raw_body, end="")
 
 
 def main(args: argparse.Namespace) -> None:
@@ -75,20 +95,11 @@ def main(args: argparse.Namespace) -> None:
         s.sendall((url + '\r\n').encode("UTF-8"))
         # Get header and check for redirects
         fp = s.makefile("rb")
-        truncated = False
-
-        try:
-            raw_header = fp.readline()
-        except ssl.SSLEOFError:
-            raw_header = b""
-            truncated = True
+        raw_header = read_header(fp)
         if not args.quiet:
             print(raw_header.decode("UTF-8"), end="")
 
         header = raw_header.decode("UTF-8").strip()
-        if truncated:
-            warn_truncated()
-            sys.exit(2)
         status, mime = header.split()[:2]
         # Handle input requests
         if status.startswith("1"):
@@ -105,20 +116,13 @@ def main(args: argparse.Namespace) -> None:
 
     # Fail if transaction was not successful
     if status.startswith("2"):
-        if mime.startswith("text/"):
-            # Decode according to declared charset
-            m = email.message.Message()
-            m.get_params()
-            raw_body, truncated = read_all(fp)
-            charset = cast(str, m.get_param("charset", "UTF-8"))
-            body = raw_body.decode(charset)
-            print(body, end="")
-        else:
-            raw_body, truncated = read_all(fp)
-            print(raw_body, end="")
-        if truncated:
-            warn_truncated()
-            sys.exit(2)
+        try:
+            raw_body = read_all(fp)
+        except TruncatedError as e:
+            # show what did arrive, then let the caller report it
+            print_body(e.partial, mime)
+            raise
+        print_body(raw_body, mime)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
@@ -133,7 +137,12 @@ def parse_cmdline() -> None:
     args = parser.parse_args()
     if args.debug:
         logging.getLogger().setLevel(20)
-    main(args)
+    try:
+        main(args)
+    except TruncatedError:
+        print("gcat: warning: connection closed without TLS close_notify; "
+              "response may be truncated", file=sys.stderr)
+        sys.exit(2)
 
 if __name__ == '__main__':
     parse_cmdline()
