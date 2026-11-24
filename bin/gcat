@@ -106,7 +106,10 @@ def open_request(url: str) -> io.BufferedReader:
     s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
                             suppress_ragged_eofs = False)
     s.sendall((url + '\r\n').encode("UTF-8"))
-    return s.makefile("rb")
+    fp = s.makefile("rb")
+    # the socket now really closes when fp does
+    s.close()
+    return fp
 
 
 def transact(url: str, quiet: bool) -> Tuple[io.BufferedReader, str, str]:
@@ -124,10 +127,12 @@ def transact(url: str, quiet: bool) -> Tuple[io.BufferedReader, str, str]:
         # Handle input requests
         if status.startswith("1"):
             # Prompt
+            fp.close()
             query = input("INPUT" + mime + "> ")
             url += "?" + urllib.parse.quote(query) # Bit lazy...
         # Follow redirects
         elif status.startswith("3"):
+            fp.close()
             url = absolutise_url(url, mime)
         # Otherwise, we're done.
         else:
