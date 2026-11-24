@@ -66,6 +66,17 @@ def print_body(raw_body: bytes, mime: str) -> None:
         print(raw_body, end="")
 
 
+def show_response(fp: io.BufferedReader, mime: str) -> None:
+    """Read the body and print it; on truncation, print what arrived."""
+    try:
+        raw_body = read_all(fp)
+    except TruncatedError as e:
+        # show what did arrive, then let the caller report it
+        print_body(e.partial, mime)
+        raise
+    print_body(raw_body, mime)
+
+
 def normalise_url(raw: str) -> str:
     """Add a missing scheme; exit 1 if the URL isn't a gemini one."""
     url = raw
@@ -123,13 +134,7 @@ def main(args: argparse.Namespace) -> None:
 
     # Fail if transaction was not successful
     if status.startswith("2"):
-        try:
-            raw_body = read_all(fp)
-        except TruncatedError as e:
-            # show what did arrive, then let the caller report it
-            print_body(e.partial, mime)
-            raise
-        print_body(raw_body, mime)
+        show_response(fp, mime)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
