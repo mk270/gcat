@@ -110,7 +110,8 @@ def main(args: argparse.Namespace) -> None:
             m = email.message.Message()
             m.get_params()
             raw_body, truncated = read_all(fp)
-            body = raw_body.decode(m.get_param("charset", "UTF-8"))
+            charset = m.get_param("charset", "UTF-8")
+            body = raw_body.decode(charset)
             print(body, end="")
         else:
             raw_body, truncated = read_all(fp)
