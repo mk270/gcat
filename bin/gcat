@@ -66,11 +66,9 @@ def print_body(raw_body: bytes, mime: str) -> None:
         print(raw_body, end="")
 
 
-def main(args: argparse.Namespace) -> None:
-    signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(5)
-
-    url = args.url
+def normalise_url(raw: str) -> str:
+    """Add a missing scheme; exit 1 if the URL isn't a gemini one."""
+    url = raw
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme == "":
         url = "gemini://"+url
@@ -79,6 +77,15 @@ def main(args: argparse.Namespace) -> None:
     if parsed_url.scheme != "gemini":
         print("Sorry, Gemini links only.")
         sys.exit(1)
+    return url
+
+
+def main(args: argparse.Namespace) -> None:
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(5)
+
+    url = normalise_url(args.url)
+    parsed_url = urllib.parse.urlparse(url)
     if parsed_url.port is not None:
         useport = parsed_url.port
     else:
