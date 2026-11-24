@@ -57,32 +57,54 @@ def read_all(fp: io.BufferedReader) -> bytes:
     return b"".join(chunks)
 
 
-def print_body(raw_body: bytes, meta: str) -> None:
+class DecodeError(Exception):
+    """A text body could not be decoded."""
+
+
+def decode_text(raw_body: bytes, charset: str, lenient: bool) -> str:
+    """Decode a text body.
+
+    Raise DecodeError if the charset is unknown or the body is not
+    valid in it.  If lenient, warn on stderr instead, falling back to
+    UTF-8 for an unknown charset and replacing any invalid bytes.
+    """
+    try:
+        return raw_body.decode(charset)
+    except LookupError as e:
+        if not lenient:
+            raise DecodeError("unknown charset %r" % charset) from e
+        print("gcat: warning: unknown charset %r; assuming UTF-8"
+              % charset, file=sys.stderr)
+        charset = "UTF-8"
+    except UnicodeDecodeError as e:
+        if not lenient:
+            raise DecodeError("body is not valid %s" % charset) from e
+        print("gcat: warning: body is not valid %s; replacing bad bytes"
+              % charset, file=sys.stderr)
+    return raw_body.decode(charset, errors="replace")
+
+
+def print_body(raw_body: bytes, meta: str, lenient: bool) -> None:
     if meta.startswith("text/"):
         # Decode according to the charset declared in the meta line
         m = email.message.Message()
         m["Content-Type"] = meta
         charset = m.get_content_charset() or "UTF-8"
-        try:
-            text = raw_body.decode(charset)
-        except LookupError:
-            print("gcat: warning: unknown charset %r; assuming UTF-8"
-                  % charset, file=sys.stderr)
-            text = raw_body.decode("UTF-8", errors="replace")
-        print(text, end="")
+        print(decode_text(raw_body, charset, lenient), end="")
     else:
         print(raw_body, end="")
 
 
-def show_response(fp: io.BufferedReader, meta: str) -> None:
+def show_response(fp: io.BufferedReader, meta: str, lenient: bool) -> None:
     """Read the body and print it; on truncation, print what arrived."""
     try:
         raw_body = read_all(fp)
     except TruncatedError as e:
-        # show what did arrive, then let the caller report it
-        print_body(e.partial, meta)
+        # Show what did arrive, then let the caller report it.  A cut-off
+        # body can end mid-character, so always decode it leniently.
+        print_body(e.partial, meta, lenient=True)
         raise
-    print_body(raw_body, meta)
+    print_body(raw_body, meta, lenient)
 
 
 def normalise_url(raw: str) -> str:
@@ -209,7 +231,7 @@ def main(args: argparse.Namespace) -> None:
     with response.conn:
         # Fail if transaction was not successful
         if response.status.startswith("2"):
-            show_response(response.conn.fp, response.meta)
+            show_response(response.conn.fp, response.meta, args.lenient)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
@@ -220,6 +242,9 @@ def parse_cmdline() -> None:
                     help='set logging level to INFO')
     parser.add_argument('url',
                         help='URL to download from')
+    parser.add_argument('--lenient', action='store_true',
+                        help='warn about, rather than fail on, a body that '
+                        'cannot be decoded')
     parser.add_argument('--timeout', type=int,
                         default=DEFAULT_TIMEOUT,
                         help='timeout, in seconds')
@@ -233,6 +258,9 @@ def parse_cmdline() -> None:
         print("gcat: warning: connection closed without TLS close_notify; "
               "response may be truncated", file=sys.stderr)
         sys.exit(2)
+    except DecodeError as e:
+        print("gcat: error: %s (see --lenient)" % e, file=sys.stderr)
+        sys.exit(4)
 
 if __name__ == '__main__':
     parse_cmdline()

@@ -6,6 +6,7 @@ gcat \- A command-line tool for fetching and displaying Gemini URLs
 .B gcat
 [\-q|--quiet]
 [\-d|--debug]
+[\-\-lenient]
 [\-\-timeout
 .IR seconds ]
 .I url
@@ -20,6 +21,12 @@ Suppress the printing of header information.
 .TP
 .BR -d ", " --debug
 Set logging level to INFO for debugging purposes.
+.TP
+.B --lenient
+Don't fail on a text body that cannot be decoded.  If the charset is unknown,
+assume UTF-8; if the body is not valid in its charset, replace the invalid
+bytes.  A warning is printed to standard error in either case.  Without this
+option such a body is an error (exit status 4).
 .TP
 .BI --timeout " seconds"
 Give up after this many seconds and exit with status 99.  The default is 5.
@@ -61,6 +68,11 @@ standard error; any data received is still printed.
 .TP
 .B 3
 The server requested input, but standard input was at end of file.
+.TP
+.B 4
+A text body could not be decoded: its charset is unknown, or it is not valid
+in its charset.  See
+.BR --lenient .
 .TP
 .B 99
 Operation timed out (see
