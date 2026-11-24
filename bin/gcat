@@ -144,6 +144,13 @@ def open_request(url: str) -> Connection:
     return Connection(s)
 
 
+def parse_header(raw_header: bytes) -> Tuple[str, str]:
+    """Split a response header line into (status, meta)."""
+    header = raw_header.decode("UTF-8").strip()
+    status, mime = header.split()[:2]
+    return status, mime
+
+
 def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
     """Do the Gemini transaction, answering prompts and following
     redirects; return the final (connection, status, mime).  The
@@ -156,8 +163,7 @@ def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
             if not quiet:
                 print(raw_header.decode("UTF-8"), end="")
 
-            header = raw_header.decode("UTF-8").strip()
-            status, mime = header.split()[:2]
+            status, mime = parse_header(raw_header)
         except Exception:
             conn.close()
             raise
