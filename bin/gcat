@@ -22,7 +22,7 @@ import io
 import codecs
 import contextlib
 from types import FrameType
-from typing import Callable, Iterator, NamedTuple, NoReturn, Optional, Tuple
+from typing import Callable, Iterator, NoReturn, Optional, Tuple
 
 DEFAULT_TIMEOUT = 5
 
@@ -112,18 +112,19 @@ class TextDecoder:
     """Decode a text body incrementally.
 
     Raise DecodeError if the charset is unknown or the body is not
-    valid in it.  If lenient, warn on stderr instead, falling back to
-    UTF-8 for an unknown charset and replacing any invalid bytes.
+    valid in it.  If lenient, call warn(message) instead, falling back
+    to UTF-8 for an unknown charset and replacing any invalid bytes.
     """
-    def __init__(self, charset: str, lenient: bool) -> None:
+    def __init__(self, charset: str, lenient: bool,
+                 warn: Callable[[str], None]) -> None:
         self.charset = charset
+        self._warn = warn
         try:
             factory = codecs.getincrementaldecoder(charset)
         except LookupError as e:
             if not lenient:
                 raise DecodeError("unknown charset %r" % charset) from e
-            print("gcat: warning: unknown charset %r; assuming UTF-8"
-                  % charset, file=sys.stderr)
+            warn("unknown charset %r; assuming UTF-8" % charset)
             self.charset = "UTF-8"
             factory = codecs.getincrementaldecoder("UTF-8")
         errors = self._register_replace() if lenient else "strict"
@@ -137,8 +138,8 @@ class TextDecoder:
             nonlocal warned
             if not warned:
                 warned = True
-                print("gcat: warning: body is not valid %s; replacing bad "
-                      "bytes" % self.charset, file=sys.stderr)
+                self._warn("body is not valid %s; replacing bad bytes"
+                           % self.charset)
             assert isinstance(exc, UnicodeDecodeError)
             return "\ufffd", exc.end
 
@@ -163,35 +164,6 @@ def meta_charset(meta: str) -> str:
     m = email.message.Message()
     m["Content-Type"] = meta
     return m.get_content_charset() or "UTF-8"
-
-
-def show_response(fp: io.BufferedReader, meta: str, lenient: bool) -> None:
-    """Write the body to stdout as it arrives.
-
-    Text is decoded by its declared charset; anything else is written
-    as raw bytes.  On truncation, what arrived has already been written.
-    """
-    out = sys.stdout
-    if meta.startswith("text/"):
-        text = TextDecoder(meta_charset(meta), lenient)
-        try:
-            for chunk in read_chunks(fp):
-                out.write(text.decode(chunk))
-                out.flush()
-        except TruncatedError:
-            out.write(text.finish_truncated())
-            out.flush()
-            raise
-        out.write(text.decode(b"", final=True))
-        out.flush()
-    else:
-        out.flush()
-        try:
-            for chunk in read_chunks(fp):
-                out.buffer.write(chunk)
-                out.buffer.flush()
-        finally:
-            out.buffer.flush()
 
 
 def normalise_url(raw: str) -> str:
@@ -240,11 +212,55 @@ class Connection:
         self.close()
 
 
-class Response(NamedTuple):
-    """The final outcome of a request; the caller closes conn."""
-    conn: Connection
-    status: str
-    meta: str
+class Response:
+    """The final outcome of a request.
+
+    The body is read with chunks() or text_chunks(), and the caller
+    closes the response, which is also a context manager.
+    """
+    def __init__(self, conn: Connection, status: str, meta: str,
+                 lenient: bool = False,
+                 on_warning: Optional[Callable[[str], None]] = None) -> None:
+        self.conn = conn
+        self.status = status
+        self.meta = meta
+        self.lenient = lenient
+        self.on_warning = on_warning
+
+    @property
+    def is_text(self) -> bool:
+        return self.meta.startswith("text/")
+
+    def chunks(self) -> Iterator[bytes]:
+        """The body as it arrives; see read_chunks."""
+        return read_chunks(self.conn.fp)
+
+    def text_chunks(self) -> Iterator[str]:
+        """The body decoded as text, as it arrives.
+
+        Decoding follows the charset in the meta line, and the response's
+        lenient setting.  If the body is truncated, what arrived is
+        yielded first, a dangling half-character replaced, and then
+        TruncatedError is raised.
+        """
+        text = TextDecoder(meta_charset(self.meta), self.lenient,
+                           self.on_warning or (lambda message: None))
+        try:
+            for chunk in self.chunks():
+                yield text.decode(chunk)
+        except TruncatedError:
+            yield text.finish_truncated()
+            raise
+        yield text.decode(b"", final=True)
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def __enter__(self) -> "Response":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
 
 def open_request(url: str) -> Connection:
@@ -292,12 +308,22 @@ class GeminiClient:
     on_header(line)
         Called with every response header line as received, before it
         is parsed, so with each redirect and prompt on the way too.
+    on_warning(message)
+        Called instead of failing, when lenient, about a text body that
+        can't be decoded properly.  Without it such warnings are dropped.
+
+    If lenient is false, a text body that can't be decoded is a
+    DecodeError.
     """
     def __init__(self,
+                 lenient: bool = False,
                  on_input: Optional[Callable[[str], str]] = None,
-                 on_header: Optional[Callable[[str], None]] = None) -> None:
+                 on_header: Optional[Callable[[str], None]] = None,
+                 on_warning: Optional[Callable[[str], None]] = None) -> None:
+        self.lenient = lenient
         self.on_input = on_input
         self.on_header = on_header
+        self.on_warning = on_warning
 
     def request(self, url: str) -> Response:
         """Fetch url; the caller must close the response's connection."""
@@ -328,7 +354,8 @@ class GeminiClient:
                 url = absolutise_url(url, meta)
             # Otherwise, we're done.
             else:
-                return Response(conn, status, meta)
+                return Response(conn, status, meta, self.lenient,
+                                self.on_warning)
 
 
 @contextlib.contextmanager
@@ -357,17 +384,42 @@ def cli_header(line: str) -> None:
     print(line, end="")
 
 
+def cli_warning(message: str) -> None:
+    print("gcat: warning: %s" % message, file=sys.stderr)
+
+
+def write_response(response: Response) -> None:
+    """Write the body to stdout as it arrives, flushing each chunk.
+
+    Text is decoded by its declared charset; anything else is written
+    as raw bytes.  On truncation, what arrived has already been written.
+    """
+    out = sys.stdout
+    if response.is_text:
+        for text in response.text_chunks():
+            out.write(text)
+            out.flush()
+    else:
+        out.flush()
+        try:
+            for chunk in response.chunks():
+                out.buffer.write(chunk)
+                out.buffer.flush()
+        finally:
+            out.buffer.flush()
+
+
 def main(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(args.timeout)
 
-    client = GeminiClient(on_input=cli_input,
-                          on_header=None if args.quiet else cli_header)
-    response = client.request(args.url)
-    with response.conn:
+    client = GeminiClient(lenient=args.lenient, on_input=cli_input,
+                          on_header=None if args.quiet else cli_header,
+                          on_warning=cli_warning)
+    with client.request(args.url) as response:
         # Fail if transaction was not successful
         if response.status.startswith("2"):
-            show_response(response.conn.fp, response.meta, args.lenient)
+            write_response(response)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
