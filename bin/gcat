@@ -160,7 +160,8 @@ class Deadline:
         """Turn a socket timeout inside the block into GeminiTimeout."""
         try:
             yield
-        except TimeoutError as e:
+        except (TimeoutError, socket.timeout) as e:
+            # (before Python 3.10 socket.timeout was a different class)
             if self._end is None:
                 raise       # not ours: the system gave up on the socket
             raise self.error() from e
