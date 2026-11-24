@@ -589,6 +589,7 @@ def main(args: argparse.Namespace) -> None:
         if response.status.startswith("2"):
             write_response(response)
 
+
 class UsageParser(argparse.ArgumentParser):
     """An ArgumentParser with its own exit status for a usage error."""
     def error(self, message: str) -> NoReturn:
@@ -623,6 +624,7 @@ def parse_cmdline() -> None:
     except GeminiError as e:
         print(e.cli_format % e, file=sys.stderr)
         sys.exit(e.exit_status)
+
 
 if __name__ == '__main__':
     parse_cmdline()
