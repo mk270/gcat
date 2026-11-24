@@ -25,7 +25,10 @@ def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
 
 def absolutise_url(base: str, relative: str) -> str:
-    # Absolutise relative links
+    """Resolve a link, as found in a redirect, against the URL it came from.
+
+    A link that already has a scheme is returned unchanged.
+    """
     if "://" not in relative:
         # Python's URL tools somehow only work with known schemes?
         base = base.replace("gemini://","http://")
@@ -38,7 +41,17 @@ class TruncatedError(Exception):
     """The connection ended without a TLS close_notify."""
 
 
+class HeaderError(Exception):
+    """The response header was missing or malformed."""
+
+
 def read_header(fp: io.BufferedReader) -> bytes:
+    """Read the response header line, including its line ending.
+
+    The result is empty if the server closed the connection cleanly
+    without sending anything.  Raise TruncatedError if the connection
+    ended without a TLS close_notify before the line was complete.
+    """
     try:
         return fp.readline()
     except ssl.SSLEOFError as e:
@@ -218,10 +231,18 @@ def open_request(url: str) -> Connection:
 
 
 def parse_header(raw_header: bytes) -> Tuple[str, str]:
-    """Split a response header line into (status, meta)."""
+    """Split a response header line into (status, meta).
+
+    Raise HeaderError if the header is empty, or does not consist of a
+    status and a meta field.
+    """
     header = raw_header.decode("UTF-8").strip()
-    status, meta = header.split(None, 1)
-    return status, meta
+    if not header:
+        raise HeaderError("server sent no response header")
+    fields = header.split(None, 1)
+    if len(fields) != 2:
+        raise HeaderError("malformed response header: %r" % header)
+    return fields[0], fields[1]
 
 
 @contextlib.contextmanager
@@ -312,6 +333,9 @@ def parse_cmdline() -> None:
     except DecodeError as e:
         print("gcat: error: %s (see --lenient)" % e, file=sys.stderr)
         sys.exit(4)
+    except HeaderError as e:
+        print("gcat: error: %s" % e, file=sys.stderr)
+        sys.exit(5)
 
 if __name__ == '__main__':
     parse_cmdline()
