@@ -9,7 +9,6 @@
 # Streaming responses is supported
 
 import email.message
-import os
 import socket
 import ssl
 import sys
