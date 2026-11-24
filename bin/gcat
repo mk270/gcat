@@ -69,6 +69,11 @@ class InputError(GeminiError):
     cli_format = "\ngcat: %s"
 
 
+class UrlError(GeminiError):
+    """The URL can't be fetched by gcat."""
+    cli_format = "%s"
+
+
 class HeaderError(GeminiError):
     """The response header was missing or malformed."""
     exit_status = 5
@@ -190,7 +195,7 @@ def show_response(fp: io.BufferedReader, meta: str, lenient: bool) -> None:
 
 
 def normalise_url(raw: str) -> str:
-    """Add a missing scheme; exit 1 if the URL isn't a gemini one."""
+    """Add a missing scheme; raise UrlError if it isn't a gemini URL."""
     url = raw
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme == "":
@@ -198,8 +203,7 @@ def normalise_url(raw: str) -> str:
         parsed_url = urllib.parse.urlparse(url)
 
     if parsed_url.scheme != "gemini":
-        print("Sorry, Gemini links only.")
-        sys.exit(1)
+        raise UrlError("Sorry, Gemini links only.")
     return url
 
 
