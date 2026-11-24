@@ -42,12 +42,36 @@ def absolutise_url(base: str, relative: str) -> str:
     return relative
 
 
-class TruncatedError(Exception):
+class GeminiError(Exception):
+    """Base class for the errors gcat reports.
+
+    exit_status is the status the command line exits with, and
+    cli_format how it words the message (given str(self)) on stderr.
+    """
+    exit_status = 1
+    cli_format = "gcat: error: %s"
+
+
+class TruncatedError(GeminiError):
     """The connection ended without a TLS close_notify."""
+    exit_status = 2
+    cli_format = "gcat: warning: %s; response may be truncated"
+
+    def __init__(self, message: str =
+                 "connection closed without TLS close_notify") -> None:
+        super().__init__(message)
 
 
-class HeaderError(Exception):
+class InputError(GeminiError):
+    """The server asked for input and none could be supplied."""
+    exit_status = 3
+    # starts a new line, as the prompt will have left the cursor mid-line
+    cli_format = "\ngcat: %s"
+
+
+class HeaderError(GeminiError):
     """The response header was missing or malformed."""
+    exit_status = 5
 
 
 def read_header(fp: io.BufferedReader) -> bytes:
@@ -73,8 +97,10 @@ def read_chunks(fp: io.BufferedReader) -> Iterator[bytes]:
         raise TruncatedError() from e
 
 
-class DecodeError(Exception):
+class DecodeError(GeminiError):
     """A text body could not be decoded."""
+    exit_status = 4
+    cli_format = "gcat: error: %s (see --lenient)"
 
 
 class TextDecoder:
@@ -285,10 +311,9 @@ def transact(url: str, quiet: bool) -> Response:
             try:
                 with alarm_paused():
                     query = input("INPUT " + meta + "> ")
-            except EOFError:
-                print("\ngcat: server requested input, but stdin is at "
-                      "end of file", file=sys.stderr)
-                sys.exit(3)
+            except EOFError as e:
+                raise InputError("server requested input, but stdin is at "
+                                 "end of file") from e
             url += "?" + urllib.parse.quote(query) # Bit lazy...
         # Follow redirects
         elif status.startswith("3"):
@@ -331,16 +356,9 @@ def parse_cmdline() -> None:
         logging.getLogger().setLevel(20)
     try:
         main(args)
-    except TruncatedError:
-        print("gcat: warning: connection closed without TLS close_notify; "
-              "response may be truncated", file=sys.stderr)
-        sys.exit(2)
-    except DecodeError as e:
-        print("gcat: error: %s (see --lenient)" % e, file=sys.stderr)
-        sys.exit(4)
-    except HeaderError as e:
-        print("gcat: error: %s" % e, file=sys.stderr)
-        sys.exit(5)
+    except GeminiError as e:
+        print(e.cli_format % e, file=sys.stderr)
+        sys.exit(e.exit_status)
 
 if __name__ == '__main__':
     parse_cmdline()
