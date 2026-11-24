@@ -102,6 +102,7 @@ def main(args: argparse.Namespace) -> None:
         # Otherwise, we're done.
         else:
             break
+
     # Fail if transaction was not successful
     if status.startswith("2"):
         if mime.startswith("text/"):
