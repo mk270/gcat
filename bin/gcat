@@ -14,6 +14,8 @@ import io
 from types import FrameType
 from typing import List, NoReturn, Tuple, cast
 
+DEFAULT_TIMEOUT = 5
+
 def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
 
@@ -181,7 +183,7 @@ def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
 
 def main(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(5)
+    signal.alarm(args.timeout)
 
     url = normalise_url(args.url)
     conn, status, mime = transact(url, args.quiet)
@@ -199,6 +201,9 @@ def parse_cmdline() -> None:
                     help='set logging level to INFO')
     parser.add_argument('url',
                         help='URL to download from')
+    parser.add_argument('timeout', type=int,
+                        default=DEFAULT_TIMEOUT,
+                        help='timeout, in seconds')
 
     args = parser.parse_args()
     if args.debug:
