@@ -6,6 +6,8 @@ gcat \- A command-line tool for fetching and displaying Gemini URLs
 .B gcat
 [\-q|--quiet]
 [\-d|--debug]
+[\-\-timeout
+.IR seconds ]
 .I url
 .SH DESCRIPTION
 .B gcat
@@ -19,12 +21,19 @@ Suppress the printing of header information.
 .BR -d ", " --debug
 Set logging level to INFO for debugging purposes.
 .TP
+.BI --timeout " seconds"
+Give up after this many seconds and exit with status 99.  The default is 5.
+The limit covers the whole operation, including any redirects and any wait
+for input.
+.TP
 .I url
 The Gemini URL to fetch. The URL should begin with "gemini://". If not specified, it will be prepended automatically.
 
 .SH SIGNALS
 .B gcat
-handles the SIGALRM signal to implement a timeout mechanism, exiting with status code 99 if the operation takes longer than 5 seconds.
+handles the SIGALRM signal to implement a timeout mechanism, exiting with status code 99 if the operation takes longer than the timeout
+(5 seconds unless changed with
+.BR --timeout ).
 
 .SH EXAMPLES
 .TP
@@ -54,7 +63,8 @@ standard error; any data received is still printed.
 The server requested input, but standard input was at end of file.
 .TP
 .B 99
-Operation timed out.
+Operation timed out (see
+.BR --timeout ).
 
 .SH NOTES
 For debugging purposes, you can enable detailed logging by using the
