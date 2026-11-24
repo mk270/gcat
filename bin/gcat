@@ -10,11 +10,14 @@ import signal
 import time
 import logging
 import argparse
+import io
+from types import FrameType
+from typing import NoReturn
 
-def timeout(signum, frame):
+def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
 
-def absolutise_url(base, relative):
+def absolutise_url(base: str, relative: str) -> str:
     # Absolutise relative links
     if "://" not in relative:
         # Python's URL tools somehow only work with known schemes?
@@ -24,7 +27,7 @@ def absolutise_url(base, relative):
     return relative
 
 
-def read_all(fp):
+def read_all(fp: io.BufferedReader):
     """Return (data, truncated); truncated means no TLS close_notify."""
     chunks = []
     try:
@@ -37,12 +40,12 @@ def read_all(fp):
         return b"".join(chunks), True
 
 
-def warn_truncated():
+def warn_truncated() -> None:
     print("gcat: warning: connection closed without TLS close_notify; "
           "response may be truncated", file=sys.stderr)
 
 
-def main(args):
+def main(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(5)
 
@@ -112,7 +115,7 @@ def main(args):
             warn_truncated()
             sys.exit(2)
 
-def parse_cmdline():
+def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('-q', '--quiet', action='store_true',
                         required=False,
