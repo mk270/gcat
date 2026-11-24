@@ -151,6 +151,62 @@ class Deadline:
                 self._end += time.monotonic() - start
 
 
+class DeadlineReader(io.RawIOBase):
+    """Raw reads from a socket, each limited by what is left of a Deadline.
+
+    Setting the timeout once, before a read of a whole line or body, would
+    let a server that drips bytes slowly keep going for ever.
+    """
+    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
+        self.sock = sock
+        self.deadline = deadline
+        self.timed_out = False
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:      # any writable buffer
+        try:
+            self.sock.settimeout(self.deadline.socket_timeout())
+            with self.deadline.enforced():
+                return self.sock.recv_into(buffer)
+        except GeminiTimeout:
+            self.timed_out = True
+            raise
+
+
+class Connection:
+    """A TLS connection and a buffered reader over it.
+
+    Reads are subject to the deadline.  close() sends a TLS close_notify
+    before releasing the socket, so the peer can tell a deliberate
+    hang-up from a truncated stream.  Usable as a context manager.
+    """
+    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
+        self.sock = sock
+        self._reader = DeadlineReader(sock, deadline)
+        self.fp: io.BufferedReader = io.BufferedReader(self._reader)
+
+    def close(self) -> None:
+        """Close politely, unless the peer has stopped answering."""
+        try:
+            if not self._reader.timed_out:
+                self.sock.settimeout(CLOSE_TIMEOUT)
+                self.sock.unwrap()
+        except OSError:
+            # includes ssl.SSLError; the peer may have gone already
+            pass
+        finally:
+            self.fp.close()
+            self.sock.close()
+
+    def __enter__(self) -> "Connection":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
 def read_header(fp: io.BufferedReader) -> bytes:
     """Read the response header line, including its line ending.
 
@@ -230,62 +286,6 @@ def meta_charset(meta: str) -> str:
     m = email.message.Message()
     m["Content-Type"] = meta
     return m.get_content_charset() or "UTF-8"
-
-
-class DeadlineReader(io.RawIOBase):
-    """Raw reads from a socket, each limited by what is left of a Deadline.
-
-    Setting the timeout once, before a read of a whole line or body, would
-    let a server that drips bytes slowly keep going for ever.
-    """
-    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
-        self.sock = sock
-        self.deadline = deadline
-        self.timed_out = False
-
-    def readable(self) -> bool:
-        return True
-
-    def readinto(self, buffer: Any) -> int:      # any writable buffer
-        try:
-            self.sock.settimeout(self.deadline.socket_timeout())
-            with self.deadline.enforced():
-                return self.sock.recv_into(buffer)
-        except GeminiTimeout:
-            self.timed_out = True
-            raise
-
-
-class Connection:
-    """A TLS connection and a buffered reader over it.
-
-    Reads are subject to the deadline.  close() sends a TLS close_notify
-    before releasing the socket, so the peer can tell a deliberate
-    hang-up from a truncated stream.  Usable as a context manager.
-    """
-    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
-        self.sock = sock
-        self._reader = DeadlineReader(sock, deadline)
-        self.fp: io.BufferedReader = io.BufferedReader(self._reader)
-
-    def close(self) -> None:
-        """Close politely, unless the peer has stopped answering."""
-        try:
-            if not self._reader.timed_out:
-                self.sock.settimeout(CLOSE_TIMEOUT)
-                self.sock.unwrap()
-        except OSError:
-            # includes ssl.SSLError; the peer may have gone already
-            pass
-        finally:
-            self.fp.close()
-            self.sock.close()
-
-    def __enter__(self) -> "Connection":
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
 
 
 class Response:
