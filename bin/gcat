@@ -435,16 +435,16 @@ class Response:
         """The body decoded as text, as it arrives.
 
         Decoding follows the charset in the meta line, and the response's
-        lenient setting.  If the body is cut short, by TruncatedError or
-        ReadError, what arrived is yielded first, a dangling
-        half-character replaced, and then the error is raised.
+        lenient setting.  If the body is cut short, by TruncatedError,
+        ReadError or GeminiTimeout, what arrived is yielded first, a
+        dangling half-character replaced, and then the error is raised.
         """
         text = TextDecoder(meta_charset(self.meta), self.lenient,
                            self.on_warning or (lambda message: None))
         try:
             for chunk in self.chunks():
                 yield text.decode(chunk)
-        except (TruncatedError, ReadError):
+        except (TruncatedError, ReadError, GeminiTimeout):
             yield text.finish_truncated()
             raise
         yield text.decode(b"", final=True)
