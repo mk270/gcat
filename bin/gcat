@@ -27,18 +27,6 @@ DEFAULT_TIMEOUT = 5
 # How long to wait for the peer while shutting a connection down
 CLOSE_TIMEOUT = 1.0
 
-def absolutise_url(base: str, relative: str) -> str:
-    """Resolve a link, as found in a redirect, against the URL it came from.
-
-    A link that already has a scheme is returned unchanged.
-    """
-    if "://" not in relative:
-        # Python's URL tools somehow only work with known schemes?
-        base = base.replace("gemini://","http://")
-        relative = urllib.parse.urljoin(base, relative)
-        relative = relative.replace("http://", "gemini://")
-    return relative
-
 
 class GeminiError(Exception):
     """Base class for the errors gcat reports.
@@ -86,6 +74,32 @@ class DecodeError(GeminiError):
 class GeminiTimeout(GeminiError):
     """The request took longer than its time limit."""
     exit_status = 99
+
+
+def absolutise_url(base: str, relative: str) -> str:
+    """Resolve a link, as found in a redirect, against the URL it came from.
+
+    A link that already has a scheme is returned unchanged.
+    """
+    if "://" not in relative:
+        # Python's URL tools somehow only work with known schemes?
+        base = base.replace("gemini://","http://")
+        relative = urllib.parse.urljoin(base, relative)
+        relative = relative.replace("http://", "gemini://")
+    return relative
+
+
+def normalise_url(raw: str) -> str:
+    """Add a missing scheme; raise UrlError if it isn't a gemini URL."""
+    url = raw
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme == "":
+        url = "gemini://"+url
+        parsed_url = urllib.parse.urlparse(url)
+
+    if parsed_url.scheme != "gemini":
+        raise UrlError("Sorry, Gemini links only.")
+    return url
 
 
 class Deadline:
@@ -216,19 +230,6 @@ def meta_charset(meta: str) -> str:
     m = email.message.Message()
     m["Content-Type"] = meta
     return m.get_content_charset() or "UTF-8"
-
-
-def normalise_url(raw: str) -> str:
-    """Add a missing scheme; raise UrlError if it isn't a gemini URL."""
-    url = raw
-    parsed_url = urllib.parse.urlparse(url)
-    if parsed_url.scheme == "":
-        url = "gemini://"+url
-        parsed_url = urllib.parse.urlparse(url)
-
-    if parsed_url.scheme != "gemini":
-        raise UrlError("Sorry, Gemini links only.")
-    return url
 
 
 class DeadlineReader(io.RawIOBase):
