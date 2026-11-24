@@ -22,7 +22,10 @@ def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
 
 def absolutise_url(base: str, relative: str) -> str:
-    # Absolutise relative links
+    """Resolve a link, as found in a redirect, against the URL it came from.
+
+    A link that already has a scheme is returned unchanged.
+    """
     if "://" not in relative:
         # Python's URL tools somehow only work with known schemes?
         base = base.replace("gemini://","http://")
@@ -36,6 +39,12 @@ class TruncatedError(Exception):
 
 
 def read_header(fp: io.BufferedReader) -> bytes:
+    """Read the response header line, including its line ending.
+
+    The result is empty if the server closed the connection cleanly
+    without sending anything.  Raise TruncatedError if the connection
+    ended without a TLS close_notify before the line was complete.
+    """
     try:
         return fp.readline()
     except ssl.SSLEOFError as e:
