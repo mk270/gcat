@@ -71,6 +71,15 @@ class DecodeError(GeminiError):
     cli_format = "gcat: error: %s (see --lenient)"
 
 
+class ConnectError(GeminiError):
+    """The connection to the server could not be made.
+
+    The host name could not be looked up, the connection failed, or the
+    TLS handshake did; the original exception is the __cause__.
+    """
+    exit_status = 6
+
+
 class GeminiTimeout(GeminiError):
     """The request took longer than its time limit."""
     exit_status = 99
@@ -207,16 +216,26 @@ class Connection:
         self.close()
 
 
+def reason(error: Exception) -> str:
+    """A short description of why an operation failed."""
+    return (getattr(error, "reason", None) or getattr(error, "strerror", None)
+            or str(error))
+
+
 def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
     """Connect to host, trying each of its addresses within the deadline.
+    Raise ConnectError if the name can't be looked up or no address works.
 
     (socket.create_connection would give each address the whole timeout.
     Looking the name up is not covered by the deadline: the resolver
     can't be interrupted.)
     """
+    try:
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as e:    # socket.gaierror is an OSError
+        raise ConnectError("cannot look up %r: %s" % (host, reason(e))) from e
     last_error: Optional[OSError] = None
-    for family, kind, proto, _, address in socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM):
+    for family, kind, proto, _, address in addresses:
         s = socket.socket(family, kind, proto)
         try:
             s.settimeout(deadline.socket_timeout())
@@ -229,7 +248,9 @@ def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
         except BaseException:
             s.close()
             raise
-    raise last_error or OSError("no addresses found for %s" % host)
+    raise ConnectError("cannot connect to %s:%d: %s" % (
+        host, port, reason(last_error) if last_error else "no addresses")
+    ) from last_error
 
 
 def open_request(url: str, deadline: Deadline) -> Connection:
@@ -248,14 +269,23 @@ def open_request(url: str, deadline: Deadline) -> Connection:
         context.verify_mode = ssl.CERT_NONE
         # The handshake is limited by the socket's timeout
         s.settimeout(deadline.socket_timeout())
-        with deadline.enforced():
-            # Don't let ssl turn a missing close_notify into a plain EOF
-            tls = context.wrap_socket(s, server_hostname=parsed_url.hostname,
-                                      suppress_ragged_eofs=False)
+        try:
+            with deadline.enforced():
+                # Don't let ssl turn a missing close_notify into a plain EOF
+                tls = context.wrap_socket(
+                    s, server_hostname=parsed_url.hostname,
+                    suppress_ragged_eofs=False)
+        except OSError as e:
+            raise ConnectError("TLS handshake with %s:%d failed: %s" % (
+                parsed_url.hostname, useport, reason(e))) from e
         try:
             tls.settimeout(deadline.socket_timeout())
             with deadline.enforced():
                 tls.sendall((url + '\r\n').encode("UTF-8"))
+        except OSError as e:
+            tls.close()
+            raise ConnectError("cannot send request to %s:%d: %s" % (
+                parsed_url.hostname, useport, reason(e))) from e
         except BaseException:
             tls.close()
             raise
