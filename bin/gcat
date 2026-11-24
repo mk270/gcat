@@ -76,14 +76,16 @@ def main(args: argparse.Namespace) -> None:
         # Get header and check for redirects
         fp = s.makefile("rb")
         truncated = False
+
         try:
-            header = fp.readline()
+            raw_header = fp.readline()
         except ssl.SSLEOFError:
-            header = b""
+            raw_header = b""
             truncated = True
         if not args.quiet:
-            print(header.decode("UTF-8"), end="")
-        header = header.decode("UTF-8").strip()
+            print(raw_header.decode("UTF-8"), end="")
+
+        header = raw_header.decode("UTF-8").strip()
         if truncated:
             warn_truncated()
             sys.exit(2)
