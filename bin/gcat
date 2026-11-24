@@ -207,6 +207,64 @@ class Connection:
         self.close()
 
 
+def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
+    """Connect to host, trying each of its addresses within the deadline.
+
+    (socket.create_connection would give each address the whole timeout.
+    Looking the name up is not covered by the deadline: the resolver
+    can't be interrupted.)
+    """
+    last_error: Optional[OSError] = None
+    for family, kind, proto, _, address in socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM):
+        s = socket.socket(family, kind, proto)
+        try:
+            s.settimeout(deadline.socket_timeout())
+            with deadline.enforced():
+                s.connect(address)
+            return s
+        except OSError as e:
+            s.close()
+            last_error = e
+        except BaseException:
+            s.close()
+            raise
+    raise last_error or OSError("no addresses found for %s" % host)
+
+
+def open_request(url: str, deadline: Deadline) -> Connection:
+    """Connect and send the request line."""
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.port is not None:
+        useport = parsed_url.port
+    else:
+        useport = 1965
+    if parsed_url.hostname is None:
+        raise UrlError("Sorry, the URL has no host name.")
+    s = connect(parsed_url.hostname, useport, deadline)
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        # The handshake is limited by the socket's timeout
+        s.settimeout(deadline.socket_timeout())
+        with deadline.enforced():
+            # Don't let ssl turn a missing close_notify into a plain EOF
+            tls = context.wrap_socket(s, server_hostname=parsed_url.hostname,
+                                      suppress_ragged_eofs=False)
+        try:
+            tls.settimeout(deadline.socket_timeout())
+            with deadline.enforced():
+                tls.sendall((url + '\r\n').encode("UTF-8"))
+        except BaseException:
+            tls.close()
+            raise
+    except BaseException:
+        s.close()
+        raise
+    return Connection(tls, deadline)
+
+
 def read_header(fp: io.BufferedReader) -> bytes:
     """Read the response header line, including its line ending.
 
@@ -337,64 +395,6 @@ class Response:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
-
-
-def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
-    """Connect to host, trying each of its addresses within the deadline.
-
-    (socket.create_connection would give each address the whole timeout.
-    Looking the name up is not covered by the deadline: the resolver
-    can't be interrupted.)
-    """
-    last_error: Optional[OSError] = None
-    for family, kind, proto, _, address in socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM):
-        s = socket.socket(family, kind, proto)
-        try:
-            s.settimeout(deadline.socket_timeout())
-            with deadline.enforced():
-                s.connect(address)
-            return s
-        except OSError as e:
-            s.close()
-            last_error = e
-        except BaseException:
-            s.close()
-            raise
-    raise last_error or OSError("no addresses found for %s" % host)
-
-
-def open_request(url: str, deadline: Deadline) -> Connection:
-    """Connect and send the request line."""
-    parsed_url = urllib.parse.urlparse(url)
-    if parsed_url.port is not None:
-        useport = parsed_url.port
-    else:
-        useport = 1965
-    if parsed_url.hostname is None:
-        raise UrlError("Sorry, the URL has no host name.")
-    s = connect(parsed_url.hostname, useport, deadline)
-    try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        # The handshake is limited by the socket's timeout
-        s.settimeout(deadline.socket_timeout())
-        with deadline.enforced():
-            # Don't let ssl turn a missing close_notify into a plain EOF
-            tls = context.wrap_socket(s, server_hostname=parsed_url.hostname,
-                                      suppress_ragged_eofs=False)
-        try:
-            tls.settimeout(deadline.socket_timeout())
-            with deadline.enforced():
-                tls.sendall((url + '\r\n').encode("UTF-8"))
-        except BaseException:
-            tls.close()
-            raise
-    except BaseException:
-        s.close()
-        raise
-    return Connection(tls, deadline)
 
 
 def parse_header(raw_header: bytes) -> Tuple[str, str]:
