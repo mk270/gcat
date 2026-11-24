@@ -91,28 +91,33 @@ def normalise_url(raw: str) -> str:
     return url
 
 
-def main(args: argparse.Namespace) -> None:
-    signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(5)
-
-    url = normalise_url(args.url)
+def open_request(url: str) -> io.BufferedReader:
+    """Connect, send the request line, return the response stream."""
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.port is not None:
         useport = parsed_url.port
     else:
         useport = 1965
+    s = socket.create_connection((parsed_url.hostname, useport))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    # Don't let ssl turn a missing close_notify into a plain EOF
+    s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
+                            suppress_ragged_eofs = False)
+    s.sendall((url + '\r\n').encode("UTF-8"))
+    return s.makefile("rb")
+
+
+def main(args: argparse.Namespace) -> None:
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(5)
+
+    url = normalise_url(args.url)
     # Do the Gemini transaction
     while True:
-        s = socket.create_connection((parsed_url.hostname, useport))
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        # Don't let ssl turn a missing close_notify into a plain EOF
-        s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
-                                suppress_ragged_eofs = False)
-        s.sendall((url + '\r\n').encode("UTF-8"))
         # Get header and check for redirects
-        fp = s.makefile("rb")
+        fp = open_request(url)
         raw_header = read_header(fp)
         if not args.quiet:
             print(raw_header.decode("UTF-8"), end="")
@@ -127,7 +132,6 @@ def main(args: argparse.Namespace) -> None:
         # Follow redirects
         elif status.startswith("3"):
             url = absolutise_url(url, mime)
-            parsed_url = urllib.parse.urlparse(url)
         # Otherwise, we're done.
         else:
             break
