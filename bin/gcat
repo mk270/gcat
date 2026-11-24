@@ -163,7 +163,12 @@ def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
         if status.startswith("1"):
             # Prompt
             conn.close()
-            query = input("INPUT" + mime + "> ")
+            try:
+                query = input("INPUT" + mime + "> ")
+            except EOFError:
+                print("\ngcat: server requested input, but stdin is at "
+                      "end of file", file=sys.stderr)
+                sys.exit(3)
             url += "?" + urllib.parse.quote(query) # Bit lazy...
         # Follow redirects
         elif status.startswith("3"):
