@@ -201,7 +201,7 @@ def parse_cmdline() -> None:
                     help='set logging level to INFO')
     parser.add_argument('url',
                         help='URL to download from')
-    parser.add_argument('timeout', type=int,
+    parser.add_argument('--timeout', type=int,
                         default=DEFAULT_TIMEOUT,
                         help='timeout, in seconds')
 
