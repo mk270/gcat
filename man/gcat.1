@@ -30,18 +30,13 @@ bytes.  A warning is printed to standard error in either case.  Without this
 option such a body is an error (exit status 4).
 .TP
 .BI --timeout " seconds"
-Give up after this many seconds and exit with status 99.  The default is 5.
-The limit covers the whole operation, including any redirects, but not the
-time spent waiting for the user to answer a prompt.
+Give up after this many seconds and exit with status 99.  The default is 5;
+0 means no limit.  The limit covers the whole request: connecting, any
+redirects, and reading all of the response body.  It does not cover looking
+up the host name, nor the time spent waiting for the user to answer a prompt.
 .TP
 .I url
 The Gemini URL to fetch. The URL should begin with "gemini://". If not specified, it will be prepended automatically.
-
-.SH SIGNALS
-.B gcat
-handles the SIGALRM signal to implement a timeout mechanism, exiting with status code 99 if the operation takes longer than the timeout
-(5 seconds unless changed with
-.BR --timeout ).
 
 .SH EXAMPLES
 .TP
@@ -80,7 +75,7 @@ written.  See
 The server's response header was missing or malformed.
 .TP
 .B 99
-Operation timed out (see
+The request timed out (see
 .BR --timeout ).
 
 .SH NOTES

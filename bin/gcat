@@ -14,20 +14,15 @@ import socket
 import ssl
 import sys
 import urllib.parse
-import signal
 import time
 import logging
 import argparse
 import io
 import codecs
 import contextlib
-from types import FrameType
-from typing import Callable, Iterator, NoReturn, Optional, Tuple
+from typing import Any, Callable, Iterator, Optional, Tuple
 
 DEFAULT_TIMEOUT = 5
-
-def timeout(signum: int, frame: FrameType | None) -> NoReturn:
-    sys.exit(99)
 
 def absolutise_url(base: str, relative: str) -> str:
     """Resolve a link, as found in a redirect, against the URL it came from.
@@ -77,6 +72,60 @@ class UrlError(GeminiError):
 class HeaderError(GeminiError):
     """The response header was missing or malformed."""
     exit_status = 5
+
+
+class GeminiTimeout(GeminiError):
+    """The request took longer than its time limit."""
+    exit_status = 99
+
+
+class Deadline:
+    """A time limit on a whole request, on a monotonic clock.
+
+    seconds is the limit, or None for no limit.  Every blocking socket
+    operation is given what is left of it, so the limit covers connecting,
+    the TLS handshake, the header and all of the body.
+    """
+    def __init__(self, seconds: Optional[float]) -> None:
+        self.seconds = seconds
+        self._end = None if seconds is None else time.monotonic() + seconds
+
+    def error(self) -> GeminiTimeout:
+        return GeminiTimeout("timed out after %g seconds"
+                             % (self.seconds or 0))
+
+    def socket_timeout(self) -> Optional[float]:
+        """The timeout for the next blocking socket operation.
+
+        None means no limit.  Raise GeminiTimeout if the time has run out.
+        """
+        if self._end is None:
+            return None
+        left = self._end - time.monotonic()
+        if left <= 0:
+            raise self.error()
+        return left
+
+    @contextlib.contextmanager
+    def enforced(self) -> Iterator[None]:
+        """Turn a socket timeout inside the block into GeminiTimeout."""
+        try:
+            yield
+        except TimeoutError as e:
+            if self._end is None:
+                raise       # not ours: the system gave up on the socket
+            raise self.error() from e
+
+    @contextlib.contextmanager
+    def paused(self) -> Iterator[None]:
+        """Don't count the time spent in the block, e.g. waiting for the
+        user to answer a prompt."""
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            if self._end is not None:
+                self._end += time.monotonic() - start
 
 
 def read_header(fp: io.BufferedReader) -> bytes:
@@ -183,21 +232,48 @@ def normalise_url(raw: str) -> str:
 CLOSE_TIMEOUT = 1.0
 
 
+class DeadlineReader(io.RawIOBase):
+    """Raw reads from a socket, each limited by what is left of a Deadline.
+
+    Setting the timeout once, before a read of a whole line or body, would
+    let a server that drips bytes slowly keep going for ever.
+    """
+    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
+        self.sock = sock
+        self.deadline = deadline
+        self.timed_out = False
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:      # any writable buffer
+        try:
+            self.sock.settimeout(self.deadline.socket_timeout())
+            with self.deadline.enforced():
+                return self.sock.recv_into(buffer)
+        except GeminiTimeout:
+            self.timed_out = True
+            raise
+
+
 class Connection:
     """A TLS connection and a buffered reader over it.
 
-    close() sends a TLS close_notify before releasing the socket, so
-    the peer can tell a deliberate hang-up from a truncated stream.
-    Usable as a context manager.
+    Reads are subject to the deadline.  close() sends a TLS close_notify
+    before releasing the socket, so the peer can tell a deliberate
+    hang-up from a truncated stream.  Usable as a context manager.
     """
-    def __init__(self, sock: ssl.SSLSocket) -> None:
+    def __init__(self, sock: ssl.SSLSocket, deadline: Deadline) -> None:
         self.sock = sock
-        self.fp = sock.makefile("rb")
+        self._reader = DeadlineReader(sock, deadline)
+        self.fp: io.BufferedReader = io.BufferedReader(self._reader)
 
     def close(self) -> None:
+        """Close politely, unless the peer has stopped answering."""
         try:
-            self.sock.settimeout(CLOSE_TIMEOUT)
-            self.sock.unwrap()
+            if not self._reader.timed_out:
+                self.sock.settimeout(CLOSE_TIMEOUT)
+                self.sock.unwrap()
         except OSError:
             # includes ssl.SSLError; the peer may have gone already
             pass
@@ -263,22 +339,62 @@ class Response:
         self.close()
 
 
-def open_request(url: str) -> Connection:
+def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
+    """Connect to host, trying each of its addresses within the deadline.
+
+    (socket.create_connection would give each address the whole timeout.
+    Looking the name up is not covered by the deadline: the resolver
+    can't be interrupted.)
+    """
+    last_error: Optional[OSError] = None
+    for family, kind, proto, _, address in socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM):
+        s = socket.socket(family, kind, proto)
+        try:
+            s.settimeout(deadline.socket_timeout())
+            with deadline.enforced():
+                s.connect(address)
+            return s
+        except OSError as e:
+            s.close()
+            last_error = e
+        except BaseException:
+            s.close()
+            raise
+    raise last_error or OSError("no addresses found for %s" % host)
+
+
+def open_request(url: str, deadline: Deadline) -> Connection:
     """Connect and send the request line."""
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.port is not None:
         useport = parsed_url.port
     else:
         useport = 1965
-    s = socket.create_connection((parsed_url.hostname, useport))
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    # Don't let ssl turn a missing close_notify into a plain EOF
-    s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
-                            suppress_ragged_eofs = False)
-    s.sendall((url + '\r\n').encode("UTF-8"))
-    return Connection(s)
+    if parsed_url.hostname is None:
+        raise UrlError("Sorry, the URL has no host name.")
+    s = connect(parsed_url.hostname, useport, deadline)
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        # The handshake is limited by the socket's timeout
+        s.settimeout(deadline.socket_timeout())
+        with deadline.enforced():
+            # Don't let ssl turn a missing close_notify into a plain EOF
+            tls = context.wrap_socket(s, server_hostname=parsed_url.hostname,
+                                      suppress_ragged_eofs=False)
+        try:
+            tls.settimeout(deadline.socket_timeout())
+            with deadline.enforced():
+                tls.sendall((url + '\r\n').encode("UTF-8"))
+        except BaseException:
+            tls.close()
+            raise
+    except BaseException:
+        s.close()
+        raise
+    return Connection(tls, deadline)
 
 
 def parse_header(raw_header: bytes) -> Tuple[str, str]:
@@ -314,12 +430,18 @@ class GeminiClient:
 
     If lenient is false, a text body that can't be decoded is a
     DecodeError.
+
+    timeout is a limit in seconds (None for none) on each request as a
+    whole, including reading its body, after which GeminiTimeout is
+    raised.  Time spent in on_input doesn't count.
     """
-    def __init__(self,
+    def __init__(self, *,
+                 timeout: Optional[float] = DEFAULT_TIMEOUT,
                  lenient: bool = False,
                  on_input: Optional[Callable[[str], str]] = None,
                  on_header: Optional[Callable[[str], None]] = None,
                  on_warning: Optional[Callable[[str], None]] = None) -> None:
+        self.timeout = timeout
         self.lenient = lenient
         self.on_input = on_input
         self.on_header = on_header
@@ -328,9 +450,10 @@ class GeminiClient:
     def request(self, url: str) -> Response:
         """Fetch url; the caller must close the response's connection."""
         url = normalise_url(url)
+        deadline = Deadline(self.timeout)
         while True:
             # Get header and check for redirects
-            conn = open_request(url)
+            conn = open_request(url, deadline)
             try:
                 raw_header = read_header(conn.fp)
                 if self.on_header:
@@ -346,7 +469,8 @@ class GeminiClient:
                 conn.close()
                 if not self.on_input:
                     raise InputError("server requested input: %s" % meta)
-                query = self.on_input(meta)
+                with deadline.paused():
+                    query = self.on_input(meta)
                 url += "?" + urllib.parse.quote(query) # Bit lazy...
             # Follow redirects
             elif status.startswith("3"):
@@ -358,23 +482,10 @@ class GeminiClient:
                                 self.on_warning)
 
 
-@contextlib.contextmanager
-def alarm_paused() -> Iterator[None]:
-    """Stop the SIGALRM timer while waiting for the user, then resume it
-    with the time that was left, so the timeout only counts our own work."""
-    remaining = signal.alarm(0)
-    try:
-        yield
-    finally:
-        if remaining:
-            signal.alarm(remaining)
-
-
 def cli_input(prompt: str) -> str:
     """Answer a prompt from the server by asking the user."""
     try:
-        with alarm_paused():
-            return input("INPUT " + prompt + "> ")
+        return input("INPUT " + prompt + "> ")
     except EOFError as e:
         raise InputError("server requested input, but stdin is at "
                          "end of file") from e
@@ -410,10 +521,9 @@ def write_response(response: Response) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
-    signal.signal(signal.SIGALRM, timeout)
-    signal.alarm(args.timeout)
-
-    client = GeminiClient(lenient=args.lenient, on_input=cli_input,
+    # a timeout of 0 means no limit
+    client = GeminiClient(timeout=args.timeout or None,
+                          lenient=args.lenient, on_input=cli_input,
                           on_header=None if args.quiet else cli_header,
                           on_warning=cli_warning)
     with client.request(args.url) as response:
@@ -435,9 +545,12 @@ def parse_cmdline() -> None:
                         'cannot be decoded')
     parser.add_argument('--timeout', type=int,
                         default=DEFAULT_TIMEOUT,
-                        help='timeout, in seconds')
+                        help='time limit in seconds for the whole request '
+                        '(0 for none)')
 
     args = parser.parse_args()
+    if args.timeout < 0:
+        parser.error("timeout must not be negative")
     if args.debug:
         logging.getLogger().setLevel(20)
     try:
