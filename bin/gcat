@@ -19,12 +19,16 @@ import argparse
 import io
 import codecs
 import contextlib
-from typing import Any, Callable, Iterator, Optional, Tuple
+from typing import Any, Callable, Iterator, NoReturn, Optional, Tuple
 
 DEFAULT_TIMEOUT = 5
 
 # How long to wait for the peer while shutting a connection down
 CLOSE_TIMEOUT = 1.0
+
+# The exit status for a bad command line (EX_USAGE in sysexits.h).  Not
+# argparse's own 2, which gcat uses for a truncated response.
+USAGE_EXIT_STATUS = 64
 
 
 class GeminiError(Exception):
@@ -578,8 +582,15 @@ def main(args: argparse.Namespace) -> None:
         if response.status.startswith("2"):
             write_response(response)
 
+class UsageParser(argparse.ArgumentParser):
+    """An ArgumentParser with its own exit status for a usage error."""
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(USAGE_EXIT_STATUS, "%s: error: %s\n" % (self.prog, message))
+
+
 def parse_cmdline() -> None:
-    parser = argparse.ArgumentParser()
+    parser = UsageParser()
     parser.add_argument('-q', '--quiet', action='store_true',
                         required=False,
                         help='Suppress printing header info')

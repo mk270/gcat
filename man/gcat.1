@@ -82,6 +82,10 @@ looked up, the connection failed, or the TLS handshake did.
 The connection failed while the response was being read, for example because
 the peer reset it.  Any part of the body that arrived has been written.
 .TP
+.B 64
+The command line was invalid.  (This is not 2, which argparse would use, so
+that a truncated response can be told apart from a usage error.)
+.TP
 .B 99
 The request timed out (see
 .BR --timeout ).
