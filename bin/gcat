@@ -207,7 +207,7 @@ def transact(url: str, quiet: bool) -> Response:
             # Prompt
             conn.close()
             try:
-                query = input("INPUT" + meta + "> ")
+                query = input("INPUT " + meta + "> ")
             except EOFError:
                 print("\ngcat: server requested input, but stdin is at "
                       "end of file", file=sys.stderr)
