@@ -109,12 +109,12 @@ def main(args: argparse.Namespace) -> None:
             # Decode according to declared charset
             m = email.message.Message()
             m.get_params()
-            body, truncated = read_all(fp)
-            body = body.decode(m.get_param("charset", "UTF-8"))
+            raw_body, truncated = read_all(fp)
+            body = raw_body.decode(m.get_param("charset", "UTF-8"))
             print(body, end="")
         else:
-            body, truncated = read_all(fp)
-            print(body, end="")
+            raw_body, truncated = read_all(fp)
+            print(raw_body, end="")
         if truncated:
             warn_truncated()
             sys.exit(2)
