@@ -24,6 +24,9 @@ from typing import Any, Callable, Iterator, Optional, Tuple
 
 DEFAULT_TIMEOUT = 5
 
+# How long to wait for the peer while shutting a connection down
+CLOSE_TIMEOUT = 1.0
+
 def absolutise_url(base: str, relative: str) -> str:
     """Resolve a link, as found in a redirect, against the URL it came from.
 
@@ -226,10 +229,6 @@ def normalise_url(raw: str) -> str:
     if parsed_url.scheme != "gemini":
         raise UrlError("Sorry, Gemini links only.")
     return url
-
-
-# How long to wait for the peer while shutting a connection down
-CLOSE_TIMEOUT = 1.0
 
 
 class DeadlineReader(io.RawIOBase):
