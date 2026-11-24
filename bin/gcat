@@ -12,7 +12,7 @@ import logging
 import argparse
 import io
 from types import FrameType
-from typing import List, NoReturn, Tuple, cast
+from typing import List, NamedTuple, NoReturn, Tuple, cast
 
 DEFAULT_TIMEOUT = 5
 
@@ -126,6 +126,13 @@ class Connection:
         self.close()
 
 
+class Response(NamedTuple):
+    """The final outcome of a transaction; the caller closes conn."""
+    conn: Connection
+    status: str
+    mime: str
+
+
 def open_request(url: str) -> Connection:
     """Connect and send the request line."""
     parsed_url = urllib.parse.urlparse(url)
@@ -151,10 +158,10 @@ def parse_header(raw_header: bytes) -> Tuple[str, str]:
     return status, mime
 
 
-def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
+def transact(url: str, quiet: bool) -> Response:
     """Do the Gemini transaction, answering prompts and following
-    redirects; return the final (connection, status, mime).  The
-    caller must close the connection."""
+    redirects; return the final response.  The caller must close its
+    connection."""
     while True:
         # Get header and check for redirects
         conn = open_request(url)
@@ -184,7 +191,7 @@ def transact(url: str, quiet: bool) -> Tuple[Connection, str, str]:
             url = absolutise_url(url, mime)
         # Otherwise, we're done.
         else:
-            return conn, status, mime
+            return Response(conn, status, mime)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -192,11 +199,11 @@ def main(args: argparse.Namespace) -> None:
     signal.alarm(args.timeout)
 
     url = normalise_url(args.url)
-    conn, status, mime = transact(url, args.quiet)
-    with conn:
+    response = transact(url, args.quiet)
+    with response.conn:
         # Fail if transaction was not successful
-        if status.startswith("2"):
-            show_response(conn.fp, mime)
+        if response.status.startswith("2"):
+            show_response(response.conn.fp, response.mime)
 
 def parse_cmdline() -> None:
     parser = argparse.ArgumentParser()
