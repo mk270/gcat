@@ -255,7 +255,9 @@ def connect(host: str, port: int, deadline: Deadline) -> socket.socket:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except (OSError, UnicodeError) as e:    # socket.gaierror is an OSError
         raise ConnectError("cannot look up %r: %s" % (host, reason(e))) from e
+
     last_error: Optional[OSError] = None
+
     for family, kind, proto, _, address in addresses:
         s = socket.socket(family, kind, proto)
         try:
@@ -288,6 +290,7 @@ def open_request(url: str, deadline: Deadline) -> Connection:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+
         # The handshake is limited by the socket's timeout
         s.settimeout(deadline.socket_timeout())
         try:
@@ -299,6 +302,7 @@ def open_request(url: str, deadline: Deadline) -> Connection:
         except OSError as e:
             raise ConnectError("TLS handshake with %s:%d failed: %s" % (
                 parsed_url.hostname, useport, reason(e))) from e
+
         try:
             tls.settimeout(deadline.socket_timeout())
             with deadline.enforced():
@@ -310,6 +314,7 @@ def open_request(url: str, deadline: Deadline) -> Connection:
         except BaseException:
             tls.close()
             raise
+
     except BaseException:
         s.close()
         raise
@@ -502,6 +507,7 @@ class GeminiClient:
         """Fetch url; the caller must close the response's connection."""
         url = normalise_url(url)
         deadline = Deadline(self.timeout)
+
         while True:
             # Get header and check for redirects
             conn = open_request(url, deadline)
@@ -514,6 +520,7 @@ class GeminiClient:
             except Exception:
                 conn.close()
                 raise
+
             # Handle input requests
             if status.startswith("1"):
                 # Prompt
