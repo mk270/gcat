@@ -12,7 +12,7 @@ import logging
 import argparse
 import io
 from types import FrameType
-from typing import Tuple, List, NoReturn
+from typing import Tuple, List, NoReturn, cast
 
 def timeout(signum: int, frame: FrameType | None) -> NoReturn:
     sys.exit(99)
@@ -110,7 +110,7 @@ def main(args: argparse.Namespace) -> None:
             m = email.message.Message()
             m.get_params()
             raw_body, truncated = read_all(fp)
-            charset = m.get_param("charset", "UTF-8")
+            charset = cast(str, m.get_param("charset", "UTF-8"))
             body = raw_body.decode(charset)
             print(body, end="")
         else:
