@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+# gcat, based on Solderpunk's origin gcat, and distributable under the same
+# terms
+
 import email.message
 import os
 import socket
