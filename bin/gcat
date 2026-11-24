@@ -12,7 +12,7 @@ import logging
 import argparse
 import io
 from types import FrameType
-from typing import List, NamedTuple, NoReturn, Tuple, cast
+from typing import List, NamedTuple, NoReturn, Tuple
 
 DEFAULT_TIMEOUT = 5
 
@@ -59,11 +59,17 @@ def read_all(fp: io.BufferedReader) -> bytes:
 
 def print_body(raw_body: bytes, meta: str) -> None:
     if meta.startswith("text/"):
-        # Decode according to declared charset
+        # Decode according to the charset declared in the meta line
         m = email.message.Message()
-        m.get_params()
-        charset = cast(str, m.get_param("charset", "UTF-8"))
-        print(raw_body.decode(charset), end="")
+        m["Content-Type"] = meta
+        charset = m.get_content_charset() or "UTF-8"
+        try:
+            text = raw_body.decode(charset)
+        except LookupError:
+            print("gcat: warning: unknown charset %r; assuming UTF-8"
+                  % charset, file=sys.stderr)
+            text = raw_body.decode("UTF-8", errors="replace")
+        print(text, end="")
     else:
         print(raw_body, end="")
 
@@ -154,7 +160,7 @@ def open_request(url: str) -> Connection:
 def parse_header(raw_header: bytes) -> Tuple[str, str]:
     """Split a response header line into (status, meta)."""
     header = raw_header.decode("UTF-8").strip()
-    status, meta = header.split()[:2]
+    status, meta = header.split(None, 1)
     return status, meta
 
 
