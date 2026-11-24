@@ -45,6 +45,11 @@ Successful completion.
 .B 1
 Invalid URL or unsupported scheme.
 .TP
+.B 2
+The server closed the connection without sending a TLS close_notify
+alert, so the response may be truncated.  A warning is printed to
+standard error; any data received is still printed.
+.TP
 .B 99
 Operation timed out.
 

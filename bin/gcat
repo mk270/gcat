@@ -24,6 +24,24 @@ def absolutise_url(base, relative):
     return relative
 
 
+def read_all(fp):
+    """Return (data, truncated); truncated means no TLS close_notify."""
+    chunks = []
+    try:
+        while True:
+            chunk = fp.read1(65536)
+            if not chunk:
+                return b"".join(chunks), False
+            chunks.append(chunk)
+    except ssl.SSLEOFError:
+        return b"".join(chunks), True
+
+
+def warn_truncated():
+    print("gcat: warning: connection closed without TLS close_notify; "
+          "response may be truncated", file=sys.stderr)
+
+
 def main(args):
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(5)
@@ -47,14 +65,24 @@ def main(args):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        s = context.wrap_socket(s, server_hostname = parsed_url.hostname)
+        # Don't let ssl turn a missing close_notify into a plain EOF
+        s = context.wrap_socket(s, server_hostname = parsed_url.hostname,
+                                suppress_ragged_eofs = False)
         s.sendall((url + '\r\n').encode("UTF-8"))
         # Get header and check for redirects
         fp = s.makefile("rb")
-        header = fp.readline()
+        truncated = False
+        try:
+            header = fp.readline()
+        except ssl.SSLEOFError:
+            header = b""
+            truncated = True
         if not args.quiet:
             print(header.decode("UTF-8"), end="")
         header = header.decode("UTF-8").strip()
+        if truncated:
+            warn_truncated()
+            sys.exit(2)
         status, mime = header.split()[:2]
         # Handle input requests
         if status.startswith("1"):
@@ -74,11 +102,15 @@ def main(args):
             # Decode according to declared charset
             m = email.message.Message()
             m.get_params()
-            body = fp.read()
+            body, truncated = read_all(fp)
             body = body.decode(m.get_param("charset", "UTF-8"))
             print(body, end="")
         else:
-            print(fp.read(), end="")
+            body, truncated = read_all(fp)
+            print(body, end="")
+        if truncated:
+            warn_truncated()
+            sys.exit(2)
 
 def parse_cmdline():
     parser = argparse.ArgumentParser()
