@@ -30,8 +30,8 @@ option such a body is an error (exit status 4).
 .TP
 .BI --timeout " seconds"
 Give up after this many seconds and exit with status 99.  The default is 5.
-The limit covers the whole operation, including any redirects and any wait
-for input.
+The limit covers the whole operation, including any redirects, but not the
+time spent waiting for the user to answer a prompt.
 .TP
 .I url
 The Gemini URL to fetch. The URL should begin with "gemini://". If not specified, it will be prepended automatically.

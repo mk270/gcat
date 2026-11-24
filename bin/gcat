@@ -11,8 +11,9 @@ import time
 import logging
 import argparse
 import io
+import contextlib
 from types import FrameType
-from typing import List, NamedTuple, NoReturn, Tuple
+from typing import Iterator, List, NamedTuple, NoReturn, Tuple
 
 DEFAULT_TIMEOUT = 5
 
@@ -186,6 +187,18 @@ def parse_header(raw_header: bytes) -> Tuple[str, str]:
     return status, meta
 
 
+@contextlib.contextmanager
+def alarm_paused() -> Iterator[None]:
+    """Stop the SIGALRM timer while waiting for the user, then resume it
+    with the time that was left, so the timeout only counts our own work."""
+    remaining = signal.alarm(0)
+    try:
+        yield
+    finally:
+        if remaining:
+            signal.alarm(remaining)
+
+
 def transact(url: str, quiet: bool) -> Response:
     """Do the Gemini transaction, answering prompts and following
     redirects; return the final response.  The caller must close its
@@ -207,7 +220,8 @@ def transact(url: str, quiet: bool) -> Response:
             # Prompt
             conn.close()
             try:
-                query = input("INPUT " + meta + "> ")
+                with alarm_paused():
+                    query = input("INPUT " + meta + "> ")
             except EOFError:
                 print("\ngcat: server requested input, but stdin is at "
                       "end of file", file=sys.stderr)
